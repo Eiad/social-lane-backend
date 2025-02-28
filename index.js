@@ -15,7 +15,7 @@ console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
 // Enable CORS for frontend with proper configuration
 const allowedOrigins = [
   process.env.FRONTEND_URL,
-  'https://d8f9-2a00-f29-1118-cd04-39fb-38da-5b68-7725.ngrok-free.app',
+  'https://sociallane-frontend.mindio.chat',
   'http://localhost:3334'
 ];
 

@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const tiktokRoutes = require('./routes/tiktok');
+const uploadRoutes = require('./routes/upload');
 
 const app = express();
 const port = process.env.PORT || 3335;
@@ -11,6 +12,9 @@ console.log('Environment:');
 console.log('- PORT:', port);
 console.log('- BACKEND_URL:', process.env.BACKEND_URL);
 console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
+console.log('- R2_BUCKET_NAME:', process.env.R2_BUCKET_NAME);
+console.log('- R2_ENDPOINT:', process.env.R2_ENDPOINT);
+console.log('- R2_PUBLIC_DOMAIN:', process.env.R2_PUBLIC_DOMAIN);
 
 // Enable CORS for frontend with proper configuration
 const allowedOrigins = [
@@ -54,6 +58,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/tiktok', tiktokRoutes);
+app.use('/upload', uploadRoutes);
 
 // TikTok domain verification file
 app.get('/tiktokxhM8HSGWC6UXDSySEBMtLOBidATHhofG.txt', (req, res) => {
@@ -67,7 +72,8 @@ app.get('/', (req, res) => {
     status: 'API is running',
     environment: {
       backend_url: process.env.BACKEND_URL,
-      frontend_url: process.env.FRONTEND_URL
+      frontend_url: process.env.FRONTEND_URL,
+      r2_public_domain: process.env.R2_PUBLIC_DOMAIN
     }
   });
 });
@@ -76,4 +82,5 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`Backend URL: ${process.env.BACKEND_URL}`);
   console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
+  console.log(`R2 Public Domain: ${process.env.R2_PUBLIC_DOMAIN}`);
 });

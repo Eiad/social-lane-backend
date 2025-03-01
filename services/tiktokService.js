@@ -57,12 +57,8 @@ async function getAccessToken(code) {
 }
 
 // Post video to TikTok
-async function postVideo(videoUrl, accessToken) {
+async function postVideo(videoUrl, accessToken, caption = '') {
   try {
-    console.log('=== TIKTOK POSTING PROCESS START ===');
-    console.log('Posting video to TikTok with URL:', videoUrl);
-    console.log('Access token available:', !!accessToken);
-    
     // First, download the video
     console.log('Attempting to download video from URL...');
     let videoBuffer;
@@ -145,28 +141,44 @@ async function postVideo(videoUrl, accessToken) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     
     // Initialize video upload with TikTok v2 API
+    const DEFAULT_CAPTION = 'Video posted via API';
+    let finalCaption;
+    if (typeof caption === 'string') {
+        const trimmedCaption = caption.trim();
+        if (trimmedCaption.length > 0) {
+            finalCaption = trimmedCaption;
+            console.log('Using provided caption:', finalCaption);
+        } else {
+            finalCaption = DEFAULT_CAPTION;
+            console.log('Caption was empty after trim, using default');
+        }
+    } else {
+        finalCaption = DEFAULT_CAPTION;
+        console.log('Caption was not a string, using default');
+    }
+    // Create the request body according to TikTok V2 API specs
     const initRequest = {
       post_info: {
-        title: 'Video posted via API',
-        privacy_level: 'SELF_ONLY', // Required for unaudited API clients
+        title: finalCaption,
+        description: finalCaption,
+        privacy_level: 'SELF_ONLY',
         disable_duet: false,
         disable_comment: false,
-        disable_stitch: false
+        disable_stitch: false,
+        video_cover_timestamp_ms: 0
       },
       source_info: {
         source: "PULL_FROM_URL",
         video_url: videoUrl
       }
     };
-    
-    console.log('Sending init request to TikTok API:', JSON.stringify(initRequest, null, 2));
-    
     let initResponse;
     try {
       initResponse = await axios.post(TIKTOK_VIDEO_UPLOAD_URL, initRequest, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
         timeout: 30000 // 30 second timeout
       });

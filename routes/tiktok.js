@@ -40,7 +40,6 @@ router.get('/callback', async (req, res) => {
     // Redirect to frontend with access token as a query parameter
     // In production, you should use a more secure method to transfer the token
     const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}`;
-    console.log('Redirecting to:', redirectUrl);
     res.redirect(redirectUrl);
   } catch (error) {
     console.error('Auth callback error:', error?.message);
@@ -51,10 +50,7 @@ router.get('/callback', async (req, res) => {
 // POST /tiktok/post-video
 router.post('/post-video', async (req, res) => {
   try {
-    console.log('=== TIKTOK POST VIDEO ROUTE START ===');
-    console.log('Request body:', JSON.stringify(req?.body || {}, null, 2));
-    
-    const { videoUrl, accessToken } = req?.body || {};
+    const { videoUrl, accessToken, caption } = req?.body || {};
     if (!videoUrl || !accessToken) {
       console.log('Missing required parameters:', {
         hasVideoUrl: !!videoUrl,
@@ -63,10 +59,8 @@ router.post('/post-video', async (req, res) => {
       return res.status(400).json({ error: 'Video URL and access token are required' });
     }
 
-    console.log('Calling tiktokService.postVideo with URL:', videoUrl);
-    console.log('Access token available:', !!accessToken);
     
-    const result = await tiktokService.postVideo(videoUrl, accessToken);
+    const result = await tiktokService.postVideo(videoUrl, accessToken, caption);
     
     console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
     console.log('=== TIKTOK POST VIDEO ROUTE END ===');

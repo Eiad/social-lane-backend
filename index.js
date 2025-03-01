@@ -20,7 +20,8 @@ console.log('- R2_PUBLIC_DOMAIN:', process.env.R2_PUBLIC_DOMAIN);
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'https://sociallane-frontend.mindio.chat',
-  'http://localhost:3334'
+  'http://localhost:3334',
+  'https://media.mindio.chat'
 ];
 
 console.log('CORS allowed origins:', allowedOrigins);

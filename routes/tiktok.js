@@ -51,15 +51,31 @@ router.get('/callback', async (req, res) => {
 // POST /tiktok/post-video
 router.post('/post-video', async (req, res) => {
   try {
+    console.log('=== TIKTOK POST VIDEO ROUTE START ===');
+    console.log('Request body:', JSON.stringify(req?.body || {}, null, 2));
+    
     const { videoUrl, accessToken } = req?.body || {};
     if (!videoUrl || !accessToken) {
+      console.log('Missing required parameters:', {
+        hasVideoUrl: !!videoUrl,
+        hasAccessToken: !!accessToken
+      });
       return res.status(400).json({ error: 'Video URL and access token are required' });
     }
 
+    console.log('Calling tiktokService.postVideo with URL:', videoUrl);
+    console.log('Access token available:', !!accessToken);
+    
     const result = await tiktokService.postVideo(videoUrl, accessToken);
+    
+    console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
+    console.log('=== TIKTOK POST VIDEO ROUTE END ===');
+    
     res.status(200).json({ message: 'Video posted successfully', data: result });
   } catch (error) {
+    console.error('=== TIKTOK POST VIDEO ROUTE ERROR ===');
     console.error('Error posting video:', error?.message);
+    console.error('Error stack:', error?.stack);
     res.status(500).json({ error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error') });
   }
 });

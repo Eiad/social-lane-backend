@@ -60,7 +60,7 @@ router.post('/post-video', async (req, res) => {
     res.status(200).json({ message: 'Video posted successfully', data: result });
   } catch (error) {
     console.error('Error posting video:', error?.message);
-    res.status(500).json({ error: 'Failed to post video to TikTok' });
+    res.status(500).json({ error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error') });
   }
 });
 

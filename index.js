@@ -33,7 +33,7 @@ app.use(cors({
     
     if (allowedOrigins.indexOf(origin) === -1) {
       console.log('CORS blocked origin:', origin);
-      return callback(null, false);
+      return callback(new Error('CORS policy violation'), false);
     }
     
     console.log('CORS allowed origin:', origin);
@@ -54,6 +54,21 @@ app.use(express.json());
 // Request logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
+// Add specific CORS headers for TikTok routes
+app.use('/tiktok', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'https://sociallane-frontend.mindio.chat');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
   next();
 });
 

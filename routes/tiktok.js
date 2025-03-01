@@ -80,4 +80,21 @@ router.post('/post-video', async (req, res) => {
   }
 });
 
+// GET /tiktok/user-info
+router.get('/user-info', async (req, res) => {
+  try {
+    const accessToken = req.headers.authorization?.split('Bearer ')?.[1];
+    
+    if (!accessToken) {
+      return res.status(401).json({ error: 'No access token provided' });
+    }
+
+    const userInfo = await tiktokService.getUserInfo(accessToken);
+    res.json({ data: userInfo });
+  } catch (error) {
+    console.error('Error getting user info:', error?.message);
+    res.status(500).json({ error: 'Failed to get user info: ' + (error?.message || 'Unknown error') });
+  }
+});
+
 module.exports = router;

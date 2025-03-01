@@ -6,6 +6,7 @@ const TIKTOK_CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET;
 const TIKTOK_AUTH_URL = 'https://www.tiktok.com/v2/auth/authorize/';
 const TIKTOK_ACCESS_TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
 const TIKTOK_VIDEO_UPLOAD_URL = 'https://open.tiktokapis.com/v2/post/publish/video/init/';
+const TIKTOK_USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
 
 // Generate TikTok OAuth URL
 function getAuthUrl() {
@@ -366,4 +367,24 @@ async function postVideo(videoUrl, accessToken) {
   }
 }
 
-module.exports = { getAuthUrl, getAccessToken, postVideo };
+// Get TikTok user info
+async function getUserInfo(accessToken) {
+  try {
+    console.log('Fetching TikTok user info with access token:', !!accessToken);
+    
+    const response = await axios.get(TIKTOK_USER_INFO_URL, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    console.log('User info response:', response?.data);
+    return response?.data?.data?.user;
+  } catch (error) {
+    console.error('Error getting user info:', error?.response?.data || error?.message);
+    throw new Error('Failed to get user info');
+  }
+}
+
+module.exports = { getAuthUrl, getAccessToken, postVideo, getUserInfo };

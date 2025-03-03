@@ -103,13 +103,23 @@ async function getAccessToken(code, codeVerifier, redirectUri) {
       redirectUri: redirectUri || `${process.env.BACKEND_URL}/twitter/callback`,
     });
     
-    console.log('Token response received');
+    console.log('Token response received:', {
+      hasAccessToken: !!accessToken,
+      hasRefreshToken: !!refreshToken,
+      accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
+      refreshTokenPrefix: refreshToken ? refreshToken.substring(0, 5) + '...' : 'missing'
+    });
     
     // Create a client with the received tokens
     const loggedClient = new TwitterApi(accessToken);
     
     // Get the user ID
     const currentUser = await loggedClient.v2.me();
+    
+    console.log('User info retrieved:', {
+      userId: currentUser?.data?.id,
+      username: currentUser?.data?.username
+    });
     
     return {
       access_token: accessToken,
@@ -125,8 +135,31 @@ async function getAccessToken(code, codeVerifier, redirectUri) {
 }
 
 // Post media tweet to Twitter
-async function postMediaTweet(videoUrl, accessToken, text = '') {
+async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecret = '') {
   try {
+    console.log('=== TWITTER POSTING PROCESS START ===');
+    console.log('Posting media tweet with credentials:', {
+      hasAccessToken: !!accessToken,
+      hasAccessTokenSecret: !!accessTokenSecret,
+      accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
+      accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing'
+    });
+    
+    // Check if we have the required credentials
+    const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
+    const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
+    
+    if (!consumerKey || !consumerSecret) {
+      console.error('Missing Twitter API credentials in environment variables');
+      throw new Error('Server configuration error: Missing Twitter API credentials');
+    }
+    
+    console.log('Twitter API credentials check:', {
+      hasConsumerKey: !!consumerKey,
+      hasConsumerSecret: !!consumerSecret,
+      consumerKeyPrefix: consumerKey ? consumerKey.substring(0, 5) + '...' : 'missing'
+    });
+    
     // First, download the video
     console.log('Attempting to download video from URL:', videoUrl);
     let videoBuffer;
@@ -227,43 +260,54 @@ async function postMediaTweet(videoUrl, accessToken, text = '') {
     let twitterClient;
     
     try {
-      // For media uploads, we need to use both OAuth 2.0 and OAuth 1.0a credentials
-      // First try with OAuth 2.0 token
-      twitterClient = new TwitterApi(accessToken);
+      // For media uploads with Twitter API v2, we need to use app-only authentication
+      // This is because user tokens from OAuth 2.0 don't have the necessary permissions for media uploads
       
-      // For media uploads, we need to use OAuth 1.0a credentials
-      // Check if we have the X_API_KEY and X_API_KEY_SECRET (the actual consumer key/secret)
-      const consumerKey = process.env.X_API_KEY;
-      const consumerSecret = process.env.X_API_KEY_SECRET;
-      const accessTokenKey = process.env.X_ACCESS_TOKEN;
-      const accessTokenSecret = process.env.X_ACCESS_TOKEN_SECRET;
+      // Get the app credentials
+      const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
+      const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
       
-      if (consumerKey && consumerSecret && accessTokenKey && accessTokenSecret) {
-        console.log('Using OAuth 1.0a credentials for media upload with X_API_KEY');
-        // Create a client with OAuth 1.0a credentials
-        const oauth1Client = new TwitterApi({
+      if (!consumerKey || !consumerSecret) {
+        console.error('Missing consumer key/secret for Twitter API');
+        throw new Error('Missing Twitter API credentials');
+      }
+      
+      console.log('Using app credentials for media upload:', {
+        hasConsumerKey: !!consumerKey,
+        hasConsumerSecret: !!consumerSecret,
+        consumerKeyPrefix: consumerKey ? consumerKey.substring(0, 5) + '...' : 'missing'
+      });
+      
+      // For media uploads, we need to use the app's own tokens
+      // These should be set in the environment variables
+      const appAccessToken = process.env.X_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN;
+      const appAccessSecret = process.env.X_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET;
+      
+      if (appAccessToken && appAccessSecret) {
+        // Use the app's own tokens for media upload
+        console.log('Using app tokens for media upload');
+        twitterClient = new TwitterApi({
           appKey: consumerKey,
           appSecret: consumerSecret,
-          accessToken: accessTokenKey,
-          accessSecret: accessTokenSecret,
+          accessToken: appAccessToken,
+          accessSecret: appAccessSecret
         });
-        
-        // Use the OAuth 1.0a client for v1 endpoints (media upload)
-        twitterClient = oauth1Client;
-      } else if (TWITTER_API_KEY && TWITTER_API_SECRET && TWITTER_ACCESS_TOKEN && TWITTER_ACCESS_TOKEN_SECRET) {
-        console.log('Using OAuth 1.0a credentials for media upload with TWITTER_API_KEY');
-        // Create a client with OAuth 1.0a credentials
-        const oauth1Client = new TwitterApi({
-          appKey: TWITTER_API_KEY,
-          appSecret: TWITTER_API_SECRET,
-          accessToken: TWITTER_ACCESS_TOKEN,
-          accessSecret: TWITTER_ACCESS_TOKEN_SECRET,
+      } else if (accessToken && accessTokenSecret) {
+        // If we have user tokens, try to use them
+        console.log('Using provided user tokens for media upload');
+        twitterClient = new TwitterApi({
+          appKey: consumerKey,
+          appSecret: consumerSecret,
+          accessToken: accessToken,
+          accessSecret: accessTokenSecret
         });
-        
-        // Use the OAuth 1.0a client for v1 endpoints (media upload)
-        twitterClient = oauth1Client;
       } else {
-        console.log('Using OAuth 2.0 credentials for media upload (not recommended for v1 API)');
+        // Fallback to app-only client
+        console.log('Falling back to app-only client');
+        twitterClient = new TwitterApi({
+          appKey: consumerKey,
+          appSecret: consumerSecret
+        });
       }
     } catch (clientError) {
       console.error('Error creating Twitter client:', clientError?.message);
@@ -359,6 +403,16 @@ async function postMediaTweet(videoUrl, accessToken, text = '') {
         console.error('Error deleting temporary file:', cleanupError?.message);
       }
       
+      // If this is an authentication error, provide a more helpful message
+      if (uploadError?.message?.includes('Bad Authentication data') || 
+          (uploadError?.data?.errors && uploadError.data.errors.some(e => e.code === 215))) {
+        console.error('=== TWITTER AUTHENTICATION ERROR ===');
+        console.error('This is likely due to invalid or expired tokens, or incorrect app credentials.');
+        console.error('Please check your Twitter API credentials and ensure the user has re-authenticated.');
+        
+        throw new Error('Twitter authentication failed. Please reconnect your Twitter account and try again.');
+      }
+      
       throw new Error(`Failed to upload media to Twitter: ${uploadError?.message}`);
     }
     
@@ -426,10 +480,13 @@ async function postMediaTweet(videoUrl, accessToken, text = '') {
       console.error('Error deleting temporary file:', cleanupError?.message);
     }
     
+    console.log('=== TWITTER POSTING PROCESS COMPLETE ===');
+    
     return {
       success: true,
-      tweet_id: tweet?.data?.id,
-      text: tweet?.data?.text,
+      tweetId: tweet?.data?.id,
+      message: 'Tweet posted successfully',
+      data: tweet?.data
     };
   } catch (error) {
     console.error('=== TWITTER POST MEDIA TWEET ERROR ===');

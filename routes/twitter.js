@@ -69,6 +69,15 @@ router.get('/callback', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent(tokenData?.error || 'Token exchange failed')}`);
     }
     
+    console.log('Token exchange successful, received tokens:', {
+      hasAccessToken: !!tokenData.access_token,
+      hasRefreshToken: !!tokenData.refresh_token,
+      accessTokenPrefix: tokenData.access_token ? tokenData.access_token.substring(0, 5) + '...' : 'missing',
+      refreshTokenPrefix: tokenData.refresh_token ? tokenData.refresh_token.substring(0, 5) + '...' : 'missing',
+      userId: tokenData.user_id,
+      username: tokenData.username
+    });
+    
     // Redirect to frontend with access token as a query parameter
     // In production, you should use a more secure method to transfer the token
     const redirectUrl = `${process.env.FRONTEND_URL}/twitter?access_token=${encodeURIComponent(tokenData.access_token)}&refresh_token=${encodeURIComponent(tokenData.refresh_token || '')}&user_id=${encodeURIComponent(tokenData.user_id || '')}&username=${encodeURIComponent(tokenData.username || '')}`;
@@ -84,30 +93,68 @@ router.get('/callback', async (req, res) => {
 // POST /twitter/post-media
 router.post('/post-media', async (req, res) => {
   try {
-    const { videoUrl, accessToken, text } = req?.body || {};
+    const { videoUrl, accessToken, accessTokenSecret, text } = req?.body || {};
     
     if (!videoUrl || !accessToken) {
       console.log('Missing required parameters:', {
         hasVideoUrl: !!videoUrl,
-        hasAccessToken: !!accessToken
+        hasAccessToken: !!accessToken,
+        hasAccessTokenSecret: !!accessTokenSecret
       });
       return res.status(400).json({ error: 'Video URL and access token are required' });
     }
     
     console.log('=== TWITTER POST MEDIA ROUTE START ===');
     console.log('Posting media to Twitter with URL:', videoUrl);
+    console.log('Twitter credentials check:', {
+      hasAccessToken: !!accessToken,
+      hasAccessTokenSecret: !!accessTokenSecret,
+      accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
+      accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing'
+    });
     
-    const result = await twitterService.postMediaTweet(videoUrl, accessToken, text);
+    // Check if we have the required environment variables
+    const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
+    const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
     
-    if (!result?.success) {
-      console.error('Twitter post failed:', result?.error || 'Unknown error');
-      return res.status(500).json({ error: 'Failed to post media to Twitter: ' + (result?.error || 'Unknown error') });
+    console.log('Twitter API credentials check:', {
+      hasConsumerKey: !!consumerKey,
+      hasConsumerSecret: !!consumerSecret,
+      consumerKeyPrefix: consumerKey ? consumerKey.substring(0, 5) + '...' : 'missing'
+    });
+    
+    if (!consumerKey || !consumerSecret) {
+      console.error('Missing Twitter API credentials in environment variables');
+      return res.status(500).json({ error: 'Server configuration error: Missing Twitter API credentials' });
     }
     
-    console.log('Twitter post result:', JSON.stringify(result || {}, null, 2));
-    console.log('=== TWITTER POST MEDIA ROUTE END ===');
-    
-    res.status(200).json({ message: 'Media posted successfully to Twitter', data: result });
+    try {
+      const result = await twitterService.postMediaTweet(videoUrl, accessToken, text, accessTokenSecret);
+      
+      if (!result?.success) {
+        console.error('Twitter post failed:', result?.error || 'Unknown error');
+        return res.status(500).json({ error: 'Failed to post media to Twitter: ' + (result?.error || 'Unknown error') });
+      }
+      
+      console.log('Twitter post result:', JSON.stringify(result || {}, null, 2));
+      console.log('=== TWITTER POST MEDIA ROUTE END ===');
+      
+      res.status(200).json({ message: 'Media posted successfully to Twitter', data: result });
+    } catch (postError) {
+      console.error('=== TWITTER POST MEDIA TWEET ERROR ===');
+      console.error('Error posting media tweet:', postError?.message);
+      console.error('Error stack:', postError?.stack);
+      
+      // Check if this is an authentication error
+      if (postError?.message?.includes('authentication') || postError?.message?.includes('Authentication')) {
+        return res.status(401).json({ 
+          error: 'Twitter authentication failed. Please reconnect your Twitter account and try again.',
+          code: 'TWITTER_AUTH_ERROR'
+        });
+      }
+      
+      throw postError; // Re-throw to be caught by the outer catch block
+    }
   } catch (error) {
     console.error('=== TWITTER POST MEDIA ROUTE ERROR ===');
     console.error('Error posting media:', error?.message);

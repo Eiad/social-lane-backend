@@ -57,8 +57,14 @@ async function getAccessToken(code) {
 }
 
 // Post video to TikTok
-async function postVideo(videoUrl, accessToken, caption = '') {
+async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '') {
   try {
+    // Check if we need to refresh the token
+    let tokenToUse = accessToken;
+    
+    // If we have a refresh token, we could implement token refresh logic here
+    // For now, we'll just use the access token
+    
     // First, download the video
     console.log('Attempting to download video from URL...');
     let videoBuffer;
@@ -174,12 +180,23 @@ async function postVideo(videoUrl, accessToken, caption = '') {
     };
     let initResponse;
     try {
+      console.log('Initializing video upload with TikTok API...');
+      console.log('Using access token:', !!tokenToUse);
+      console.log('Using refresh token:', !!refreshToken);
+      
+      const headers = {
+        'Authorization': `Bearer ${tokenToUse}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
+      
+      // Add refresh token to headers if available
+      if (refreshToken) {
+        headers['X-Refresh-Token'] = refreshToken;
+      }
+      
       initResponse = await axios.post(TIKTOK_VIDEO_UPLOAD_URL, initRequest, {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
+        headers,
         timeout: 30000 // 30 second timeout
       });
       
@@ -232,13 +249,20 @@ async function postVideo(videoUrl, accessToken, caption = '') {
           // Check the status of the upload
           console.log(`Checking upload status, attempt ${attempts}/${maxAttempts}...`);
           
+          const statusHeaders = {
+            'Authorization': `Bearer ${tokenToUse}`,
+            'Content-Type': 'application/json'
+          };
+          
+          // Add refresh token to headers if available
+          if (refreshToken) {
+            statusHeaders['X-Refresh-Token'] = refreshToken;
+          }
+          
           statusResponse = await axios.post('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
             publish_id: publishId
           }, {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
+            headers: statusHeaders,
             timeout: 15000 // 15 second timeout
           });
           
@@ -380,16 +404,28 @@ async function postVideo(videoUrl, accessToken, caption = '') {
 }
 
 // Get TikTok user info
-async function getUserInfo(accessToken) {
+async function getUserInfo(accessToken, refreshToken = '') {
   try {
     console.log('Fetching TikTok user info with access token:', !!accessToken);
+    console.log('Refresh token provided:', !!refreshToken);
     
-    const response = await axios.get(TIKTOK_USER_INFO_URL, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    // Check if we need to refresh the token
+    let tokenToUse = accessToken;
+    
+    // If we have a refresh token, we could implement token refresh logic here
+    // For now, we'll just use the access token
+    
+    const headers = {
+      'Authorization': `Bearer ${tokenToUse}`,
+      'Content-Type': 'application/json'
+    };
+    
+    // Add refresh token to headers if available
+    if (refreshToken) {
+      headers['X-Refresh-Token'] = refreshToken;
+    }
+    
+    const response = await axios.get(TIKTOK_USER_INFO_URL, { headers });
     
     console.log('User info response:', response?.data);
     return response?.data?.data?.user;

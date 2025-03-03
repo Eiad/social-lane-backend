@@ -39,7 +39,7 @@ router.get('/callback', async (req, res) => {
     
     // Redirect to frontend with access token as a query parameter
     // In production, you should use a more secure method to transfer the token
-    const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}`;
+    const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}${tokenData.refresh_token ? `&refresh_token=${encodeURIComponent(tokenData.refresh_token)}` : ''}`;
     res.redirect(redirectUrl);
   } catch (error) {
     console.error('Auth callback error:', error?.message);
@@ -50,7 +50,7 @@ router.get('/callback', async (req, res) => {
 // POST /tiktok/post-video
 router.post('/post-video', async (req, res) => {
   try {
-    const { videoUrl, accessToken, caption } = req?.body || {};
+    const { videoUrl, accessToken, refreshToken, caption } = req?.body || {};
     if (!videoUrl || !accessToken) {
       console.log('Missing required parameters:', {
         hasVideoUrl: !!videoUrl,
@@ -60,7 +60,7 @@ router.post('/post-video', async (req, res) => {
     }
 
     
-    const result = await tiktokService.postVideo(videoUrl, accessToken, caption);
+    const result = await tiktokService.postVideo(videoUrl, accessToken, caption, refreshToken);
     
     console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
     console.log('=== TIKTOK POST VIDEO ROUTE END ===');
@@ -78,12 +78,13 @@ router.post('/post-video', async (req, res) => {
 router.get('/user-info', async (req, res) => {
   try {
     const accessToken = req.headers.authorization?.split('Bearer ')?.[1];
+    const refreshToken = req.headers['x-refresh-token'];
     
     if (!accessToken) {
       return res.status(401).json({ error: 'No access token provided' });
     }
 
-    const userInfo = await tiktokService.getUserInfo(accessToken);
+    const userInfo = await tiktokService.getUserInfo(accessToken, refreshToken);
     res.json({ data: userInfo });
   } catch (error) {
     console.error('Error getting user info:', error?.message);

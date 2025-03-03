@@ -1,12 +1,25 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const connectDB = require('./config/db');
+const { initScheduler } = require('./services/scheduler');
 const tiktokRoutes = require('./routes/tiktok');
 const twitterRoutes = require('./routes/twitter');
 const uploadRoutes = require('./routes/upload');
+const postsRoutes = require('./routes/posts');
 
 const app = express();
 const port = process.env.PORT || 3335;
+
+// Connect to MongoDB
+connectDB()
+  .then(() => {
+    console.log('MongoDB connection established');
+    
+    // Initialize the scheduler after DB connection is established
+    initScheduler();
+  })
+  .catch(err => console.error('MongoDB connection error:', err?.message));
 
 // Log environment variables (without secrets)
 console.log('Environment:');
@@ -49,8 +62,21 @@ app.use(cors({
 // Add OPTIONS handling for preflight requests
 app.options('*', cors());
 
+// Add timeout middleware
+app.use((req, res, next) => {
+  // Set a timeout for all requests (2 minutes)
+  req.setTimeout(120000, () => {
+    console.error('Request timeout exceeded');
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Request timeout exceeded' });
+    }
+  });
+  next();
+});
+
 // Parse JSON bodies
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -92,6 +118,7 @@ app.use('/twitter', (req, res, next) => {
 app.use('/tiktok', tiktokRoutes);
 app.use('/twitter', twitterRoutes);
 app.use('/upload', uploadRoutes);
+app.use('/posts', postsRoutes);
 
 // TikTok domain verification file
 app.get('/tiktokxhM8HSGWC6UXDSySEBMtLOBidATHhofG.txt', (req, res) => {

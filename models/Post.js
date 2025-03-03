@@ -1,0 +1,56 @@
+const mongoose = require('mongoose');
+
+const PostSchema = new mongoose.Schema({
+  video_url: {
+    type: String,
+    required: true
+  },
+  video_id: {
+    type: String
+  },
+  post_description: {
+    type: String,
+    required: true
+  },
+  platforms: {
+    type: [String],
+    required: true,
+    enum: ['twitter', 'tiktok', 'instagram', 'facebook', 'linkedin']
+  },
+  userId: {
+    type: String,
+    required: true
+  },
+  isScheduled: {
+    type: Boolean,
+    default: false
+  },
+  scheduledDate: {
+    type: Date
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'processing', 'completed', 'failed'],
+    default: 'pending'
+  },
+  date: {
+    type: Date,
+    default: Date.now
+  },
+  tiktok_access_token: {
+    type: String
+  },
+  tiktok_refresh_token: {
+    type: String
+  },
+  twitter_access_token: {
+    type: String
+  },
+  twitter_access_token_secret: {
+    type: String
+  }
+}, {
+  timestamps: true
+});
+
+module.exports = mongoose.model('Post', PostSchema); 

@@ -113,9 +113,9 @@ router.post('/post-media', async (req, res) => {
       accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing'
     });
     
-    // Check if we have the required environment variables
-    const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
-    const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
+    // Check if we have the required credentials
+    const consumerKey = process.env.TWITTER_API_KEY;
+    const consumerSecret = process.env.TWITTER_API_SECRET;
     
     console.log('Twitter API credentials check:', {
       hasConsumerKey: !!consumerKey,

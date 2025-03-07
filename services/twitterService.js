@@ -10,8 +10,7 @@ const TWITTER_ACCESS_TOKEN = process.env.TWITTER_ACCESS_TOKEN;
 const TWITTER_ACCESS_TOKEN_SECRET = process.env.TWITTER_ACCESS_TOKEN_SECRET;
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const TWITTER_CLIENT_ID = process.env.TWITTER_CLIENT_ID;
-const X_CLIENT_ID = process.env.X_CLIENT_ID;
-const X_CLIENT_SECRET = process.env.X_CLIENT_SECRET;
+const TWITTER_CLIENT_SECRET = process.env.TWITTER_CLIENT_SECRET;
 
 // Generate Twitter OAuth URL
 function getAuthUrl() {
@@ -21,9 +20,8 @@ function getAuthUrl() {
     const callbackUrl = `${process.env.BACKEND_URL}/twitter/callback`;
     
     // Check if we have the required credentials
-    // First check X_CLIENT_ID, then fall back to TWITTER_CLIENT_ID
-    const clientId = X_CLIENT_ID || TWITTER_CLIENT_ID;
-    const clientSecret = X_CLIENT_SECRET || TWITTER_API_SECRET;
+    const clientId = TWITTER_CLIENT_ID;
+    const clientSecret = TWITTER_CLIENT_SECRET;
     
     if (!clientId) {
       console.error('Missing Twitter API client ID');
@@ -72,9 +70,8 @@ async function getAccessToken(code, codeVerifier, redirectUri) {
     console.log('Exchanging code for access token with code:', code);
     
     // Check if we have the required credentials
-    // First check X_CLIENT_ID, then fall back to TWITTER_CLIENT_ID
-    const clientId = X_CLIENT_ID || TWITTER_CLIENT_ID;
-    const clientSecret = X_CLIENT_SECRET || TWITTER_API_SECRET;
+    const clientId = TWITTER_CLIENT_ID;
+    const clientSecret = TWITTER_CLIENT_SECRET;
     
     if (!clientId) {
       console.error('Missing Twitter API client ID');
@@ -146,8 +143,8 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
     });
     
     // Check if we have the required credentials
-    const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
-    const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
+    const consumerKey = process.env.TWITTER_API_KEY;
+    const consumerSecret = process.env.TWITTER_API_SECRET;
     
     if (!consumerKey || !consumerSecret) {
       console.error('Missing Twitter API credentials in environment variables');
@@ -264,8 +261,8 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
       // This is because user tokens from OAuth 2.0 don't have the necessary permissions for media uploads
       
       // Get the app credentials
-      const consumerKey = process.env.X_API_KEY || process.env.TWITTER_API_KEY;
-      const consumerSecret = process.env.X_API_KEY_SECRET || process.env.TWITTER_API_SECRET;
+      const consumerKey = process.env.TWITTER_API_KEY;
+      const consumerSecret = process.env.TWITTER_API_SECRET;
       
       if (!consumerKey || !consumerSecret) {
         console.error('Missing consumer key/secret for Twitter API');
@@ -280,8 +277,8 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
       
       // For media uploads, we need to use the app's own tokens
       // These should be set in the environment variables
-      const appAccessToken = process.env.X_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN;
-      const appAccessSecret = process.env.X_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET;
+      const appAccessToken = process.env.TWITTER_ACCESS_TOKEN;
+      const appAccessSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET;
       
       if (appAccessToken && appAccessSecret) {
         // Use the app's own tokens for media upload
@@ -524,9 +521,8 @@ async function refreshAccessToken(refreshToken) {
     console.log('Refreshing access token');
     
     // Check if we have the required credentials
-    // First check X_CLIENT_ID, then fall back to TWITTER_CLIENT_ID
-    const clientId = X_CLIENT_ID || TWITTER_CLIENT_ID;
-    const clientSecret = X_CLIENT_SECRET || TWITTER_API_SECRET;
+    const clientId = TWITTER_CLIENT_ID;
+    const clientSecret = TWITTER_CLIENT_SECRET;
     
     if (!clientId) {
       console.error('Missing Twitter API client ID');

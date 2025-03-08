@@ -90,76 +90,51 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// POST /twitter/post-media
-router.post('/post-media', async (req, res) => {
+// POST /twitter/post-video
+router.post('/post-video', async (req, res) => {
   try {
+    console.log('=== TWITTER POST VIDEO ROUTE START ===');
+    console.log('Request body:', JSON.stringify(req.body || {}, null, 2));
+    
     const { videoUrl, accessToken, accessTokenSecret, text } = req?.body || {};
     
-    if (!videoUrl || !accessToken) {
+    if (!videoUrl || !accessToken || !accessTokenSecret) {
       console.log('Missing required parameters:', {
         hasVideoUrl: !!videoUrl,
         hasAccessToken: !!accessToken,
         hasAccessTokenSecret: !!accessTokenSecret
       });
-      return res.status(400).json({ error: 'Video URL and access token are required' });
+      return res.status(400).json({ error: 'Video URL, access token, and access token secret are required' });
     }
-    
-    console.log('=== TWITTER POST MEDIA ROUTE START ===');
-    console.log('Posting media to Twitter with URL:', videoUrl);
+
+    console.log('Posting video to Twitter with URL:', videoUrl);
     console.log('Twitter credentials check:', {
       hasAccessToken: !!accessToken,
       hasAccessTokenSecret: !!accessTokenSecret,
       accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
       accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing'
     });
+
+    const result = await twitterService.postMediaTweet(videoUrl, accessToken, text, accessTokenSecret);
     
-    // Check if we have the required credentials
-    const consumerKey = process.env.TWITTER_API_KEY;
-    const consumerSecret = process.env.TWITTER_API_SECRET;
+    console.log('Twitter post result:', JSON.stringify(result || {}, null, 2));
+    console.log('=== TWITTER POST VIDEO ROUTE END ===');
     
-    console.log('Twitter API credentials check:', {
-      hasConsumerKey: !!consumerKey,
-      hasConsumerSecret: !!consumerSecret,
-      consumerKeyPrefix: consumerKey ? consumerKey.substring(0, 5) + '...' : 'missing'
-    });
-    
-    if (!consumerKey || !consumerSecret) {
-      console.error('Missing Twitter API credentials in environment variables');
-      return res.status(500).json({ error: 'Server configuration error: Missing Twitter API credentials' });
-    }
-    
-    try {
-      const result = await twitterService.postMediaTweet(videoUrl, accessToken, text, accessTokenSecret);
-      
-      if (!result?.success) {
-        console.error('Twitter post failed:', result?.error || 'Unknown error');
-        return res.status(500).json({ error: 'Failed to post media to Twitter: ' + (result?.error || 'Unknown error') });
-      }
-      
-      console.log('Twitter post result:', JSON.stringify(result || {}, null, 2));
-      console.log('=== TWITTER POST MEDIA ROUTE END ===');
-      
-      res.status(200).json({ message: 'Media posted successfully to Twitter', data: result });
-    } catch (postError) {
-      console.error('=== TWITTER POST MEDIA TWEET ERROR ===');
-      console.error('Error posting media tweet:', postError?.message);
-      console.error('Error stack:', postError?.stack);
-      
-      // Check if this is an authentication error
-      if (postError?.message?.includes('authentication') || postError?.message?.includes('Authentication')) {
-        return res.status(401).json({ 
-          error: 'Twitter authentication failed. Please reconnect your Twitter account and try again.',
-          code: 'TWITTER_AUTH_ERROR'
-        });
-      }
-      
-      throw postError; // Re-throw to be caught by the outer catch block
-    }
+    res.status(200).json({ message: 'Video posted successfully', data: result });
   } catch (error) {
-    console.error('=== TWITTER POST MEDIA ROUTE ERROR ===');
-    console.error('Error posting media:', error?.message);
+    console.error('=== TWITTER POST VIDEO ROUTE ERROR ===');
+    console.error('Error posting video:', error?.message);
     console.error('Error stack:', error?.stack);
-    res.status(500).json({ error: 'Failed to post media to Twitter: ' + (error?.message || 'Unknown error') });
+    
+    // Check if this is an authentication error
+    if (error?.message?.includes('authentication') || error?.message?.includes('Authentication')) {
+      return res.status(401).json({ 
+        error: 'Twitter authentication failed. Please reconnect your Twitter account and try again.',
+        code: 'TWITTER_AUTH_ERROR'
+      });
+    }
+    
+    res.status(500).json({ error: 'Failed to post video to Twitter: ' + (error?.message || 'Unknown error') });
   }
 });
 

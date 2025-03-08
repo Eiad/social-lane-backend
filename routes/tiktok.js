@@ -5,18 +5,24 @@ const tiktokService = require('../services/tiktokService');
 // Get TikTok auth URL
 router.get('/auth', (req, res) => {
   try {
-    const authUrl = tiktokService.getAuthUrl();
-    res.json({ authUrl });
+    // Add force_login=true to allow switching accounts
+    const authUrl = tiktokService.getAuthUrl({
+      forceLogin: true,
+      state: Math.random().toString(36).substring(2)
+    });
+    
+    // Instead of sending JSON, redirect directly to TikTok
+    res.redirect(authUrl);
   } catch (error) {
     console.error('Auth URL error:', error?.message);
-    res.status(500).json({ error: 'Failed to generate auth URL' });
+    res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent('Failed to generate auth URL')}`);
   }
 });
 
 // TikTok OAuth callback
 router.get('/callback', async (req, res) => {
   try {
-    const { code, error, error_description } = req?.query || {};
+    const { code, error, error_description, state } = req?.query || {};
     
     // Handle error from TikTok
     if (error) {
@@ -38,7 +44,6 @@ router.get('/callback', async (req, res) => {
     }
     
     // Redirect to frontend with access token as a query parameter
-    // In production, you should use a more secure method to transfer the token
     const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}${tokenData.refresh_token ? `&refresh_token=${encodeURIComponent(tokenData.refresh_token)}` : ''}`;
     res.redirect(redirectUrl);
   } catch (error) {
@@ -59,7 +64,6 @@ router.post('/post-video', async (req, res) => {
       return res.status(400).json({ error: 'Video URL and access token are required' });
     }
 
-    
     const result = await tiktokService.postVideo(videoUrl, accessToken, caption, refreshToken);
     
     console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
@@ -82,6 +86,17 @@ router.get('/user-info', async (req, res) => {
     
     if (!accessToken) {
       return res.status(401).json({ error: 'No access token provided' });
+    }
+
+    // Add CORS headers
+    res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL);
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Authorization, X-Refresh-Token, Content-Type');
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    // Handle preflight request
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
     }
 
     const userInfo = await tiktokService.getUserInfo(accessToken, refreshToken);

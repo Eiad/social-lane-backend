@@ -88,6 +88,7 @@ router.post('/', async (req, res) => {
       scheduledDate,
       tiktok_access_token,
       tiktok_refresh_token,
+      tiktok_accounts,
       twitter_access_token,
       twitter_access_token_secret
     } = req.body;
@@ -115,6 +116,14 @@ router.post('/', async (req, res) => {
     
     console.log('Creating post with platforms:', platforms);
     console.log('Post is scheduled:', isScheduled);
+    if (tiktok_accounts) {
+      console.log('TikTok accounts provided:', tiktok_accounts.length);
+      console.log('TikTok accounts data sample:', tiktok_accounts.map(acc => ({
+        openId: acc.openId,
+        hasAccessToken: !!acc.accessToken,
+        hasRefreshToken: !!acc.refreshToken
+      })));
+    }
     
     // Create new post object with only provided fields
     const postData = {
@@ -130,9 +139,28 @@ router.post('/', async (req, res) => {
     if (isScheduled !== undefined) postData.isScheduled = isScheduled;
     if (scheduledDate) postData.scheduledDate = scheduledDate;
     
-    // Add token fields if they exist
-    if (tiktok_access_token) postData.tiktok_access_token = tiktok_access_token;
-    if (tiktok_refresh_token) postData.tiktok_refresh_token = tiktok_refresh_token;
+    // Handle TikTok accounts
+    if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
+      // Make sure the TikTok accounts have the right schema format
+      postData.tiktok_accounts = tiktok_accounts.map(account => ({
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken || null,
+        openId: account.openId
+      }));
+      console.log('Formatted TikTok accounts for database:', 
+        postData.tiktok_accounts.map(acc => ({
+          openId: acc.openId,
+          hasAccessToken: !!acc.accessToken,
+          hasRefreshToken: !!acc.refreshToken
+        }))
+      );
+    } else if (tiktok_access_token) {
+      // Fallback to single account for backward compatibility
+      postData.tiktok_access_token = tiktok_access_token;
+      if (tiktok_refresh_token) postData.tiktok_refresh_token = tiktok_refresh_token;
+    }
+    
+    // Add Twitter token fields if they exist
     if (twitter_access_token) postData.twitter_access_token = twitter_access_token;
     if (twitter_access_token_secret) postData.twitter_access_token_secret = twitter_access_token_secret;
     
@@ -143,6 +171,15 @@ router.post('/', async (req, res) => {
     console.log('Saving post to database...');
     const newPost = new Post(postData);
     const post = await newPost.save();
+    
+    // Debug: Check if the saved post has the TikTok accounts
+    const savedPost = await Post.findById(post._id).lean();
+    console.log('Saved post:', {
+      id: savedPost._id,
+      has_tiktok_accounts: !!savedPost.tiktok_accounts,
+      tiktok_accounts_count: savedPost.tiktok_accounts?.length || 0,
+      has_legacy_tiktok: !!savedPost.tiktok_access_token
+    });
     
     console.log('Post saved successfully with ID:', post._id);
     res.json(post);
@@ -231,6 +268,76 @@ router.delete('/:id', async (req, res) => {
     }
     
     res.status(500).send('Server Error');
+  }
+});
+
+// @route   POST /posts/test-scheduler/:id
+// @desc    Test the scheduler by processing a specific post
+// @access  Public (should be Private in production)
+router.post('/test-scheduler/:id', async (req, res) => {
+  try {
+    const postId = req.params.id;
+    if (!postId) {
+      return res.status(400).json({ error: 'Post ID is required' });
+    }
+    
+    console.log(`Testing scheduler for post ID: ${postId}`);
+    
+    // Get the post
+    const post = await Post.findById(postId).lean();
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    
+    // Log post details
+    console.log('Post details:', {
+      id: post._id,
+      platforms: post.platforms,
+      has_tiktok_accounts: !!post.tiktok_accounts,
+      tiktok_accounts_count: post.tiktok_accounts?.length || 0,
+      has_legacy_tiktok: !!post.tiktok_access_token,
+      has_twitter: !!post.twitter_access_token
+    });
+    
+    if (post.tiktok_accounts) {
+      console.log('TikTok accounts in post:', 
+        post.tiktok_accounts.map(acc => ({
+          openId: acc.openId,
+          hasAccessToken: !!acc.accessToken,
+          hasRefreshToken: !!acc.refreshToken
+        }))
+      );
+    }
+    
+    // Import the scheduler
+    const { processPost } = require('../services/scheduler');
+    
+    // Process the post
+    try {
+      const results = await processPost(post);
+      console.log('Scheduler test completed successfully');
+      
+      // Update status
+      await Post.updateOne({ _id: post._id }, { status: 'completed' });
+      
+      res.json({ 
+        message: 'Post processed successfully', 
+        results 
+      });
+    } catch (error) {
+      console.error('Error processing post:', error?.message);
+      
+      // Update status
+      await Post.updateOne({ _id: post._id }, { status: 'failed' });
+      
+      res.status(500).json({ 
+        error: 'Error processing post', 
+        details: error?.message 
+      });
+    }
+  } catch (err) {
+    console.error('Error in test-scheduler endpoint:', err?.message);
+    res.status(500).json({ error: 'Server Error', message: err?.message });
   }
 });
 

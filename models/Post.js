@@ -1,5 +1,20 @@
 const mongoose = require('mongoose');
 
+// Define the TikTok account schema
+const TikTokAccountSchema = new mongoose.Schema({
+  accessToken: {
+    type: String,
+    required: true
+  },
+  refreshToken: {
+    type: String
+  },
+  openId: {
+    type: String,
+    required: true
+  }
+}, { _id: false }); // _id: false prevents MongoDB from adding an _id field to subdocuments
+
 const PostSchema = new mongoose.Schema({
   video_url: {
     type: String,
@@ -37,11 +52,17 @@ const PostSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  // Legacy single account fields (maintained for backward compatibility)
   tiktok_access_token: {
     type: String
   },
   tiktok_refresh_token: {
     type: String
+  },
+  // New field for multiple TikTok accounts
+  tiktok_accounts: {
+    type: [TikTokAccountSchema],
+    default: undefined
   },
   twitter_access_token: {
     type: String

@@ -7,6 +7,7 @@ const tiktokRoutes = require('./routes/tiktok');
 const twitterRoutes = require('./routes/twitter');
 const uploadRoutes = require('./routes/upload');
 const postsRoutes = require('./routes/posts');
+const usersRoutes = require('./routes/users');
 
 const app = express();
 const port = process.env.PORT || 3335;
@@ -119,6 +120,7 @@ app.use('/tiktok', tiktokRoutes);
 app.use('/twitter', twitterRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/posts', postsRoutes);
+app.use('/users', usersRoutes);
 
 // TikTok domain verification file
 app.get('/tiktokxhM8HSGWC6UXDSySEBMtLOBidATHhofG.txt', (req, res) => {

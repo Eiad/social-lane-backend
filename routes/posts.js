@@ -90,7 +90,8 @@ router.post('/', async (req, res) => {
       tiktok_refresh_token,
       tiktok_accounts,
       twitter_access_token,
-      twitter_access_token_secret
+      twitter_access_token_secret,
+      twitter_refresh_token
     } = req.body;
     
     // Validate required fields
@@ -163,6 +164,7 @@ router.post('/', async (req, res) => {
     // Add Twitter token fields if they exist
     if (twitter_access_token) postData.twitter_access_token = twitter_access_token;
     if (twitter_access_token_secret) postData.twitter_access_token_secret = twitter_access_token_secret;
+    if (twitter_refresh_token) postData.twitter_refresh_token = twitter_refresh_token;
     
     // Set status based on whether it's scheduled
     postData.status = isScheduled ? 'pending' : 'completed';
@@ -178,7 +180,9 @@ router.post('/', async (req, res) => {
       id: savedPost._id,
       has_tiktok_accounts: !!savedPost.tiktok_accounts,
       tiktok_accounts_count: savedPost.tiktok_accounts?.length || 0,
-      has_legacy_tiktok: !!savedPost.tiktok_access_token
+      has_legacy_tiktok: !!savedPost.tiktok_access_token,
+      has_twitter: !!savedPost.twitter_access_token,
+      has_twitter_refresh: !!savedPost.twitter_refresh_token
     });
     
     console.log('Post saved successfully with ID:', post._id);

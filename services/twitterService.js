@@ -16,8 +16,9 @@ const TWITTER_CLIENT_SECRET = process.env.TWITTER_CLIENT_SECRET;
 function getAuthUrl() {
   try {
     // Twitter OAuth 2.0 with PKCE flow is recommended for user authentication
-    // This is a simplified version for demonstration
     const callbackUrl = `${process.env.BACKEND_URL}/twitter/callback`;
+    
+    console.log('Using Twitter callback URL:', callbackUrl);
     
     // Check if we have the required credentials
     const clientId = TWITTER_CLIENT_ID;
@@ -49,13 +50,15 @@ function getAuthUrl() {
     // Generate auth link
     const { url, codeVerifier, state } = client.generateOAuth2AuthLink(
       callbackUrl, 
-      { scope: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'] }
+      { 
+        // Only use scopes explicitly supported by Twitter API v2
+        scope: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
+      }
     );
     
     console.log('Generated Twitter auth link successfully');
+    console.log('Auth URL:', url);
     
-    // Store codeVerifier and state for later use in the callback
-    // In a real app, you would store these in a database or session
     return { url, codeVerifier, state };
   } catch (error) {
     console.error('Error generating Twitter auth URL:', error?.message);
@@ -159,13 +162,12 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
     }
     
     // Download the video
-    console.log('Attempting to download video from URL:', videoUrl);
-    let videoBuffer;
+    console.log('Downloading video from URL:', videoUrl);
+    let videoPath;
     
     try {
-      console.log('Making HTTP request to download video...');
-      
-      const MAX_RETRIES = 3;
+      // Implement retry logic for video download
+      const MAX_RETRIES = 7;
       let retryCount = 0;
       
       while (retryCount < MAX_RETRIES) {
@@ -190,10 +192,10 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
             throw new Error('Video download failed: Empty response');
           }
           
-          videoBuffer = Buffer.from(videoResponse.data);
-          console.log('Downloaded video, size:', videoBuffer.length, 'bytes');
+          videoPath = videoResponse.data;
+          console.log('Downloaded video, size:', videoPath.length, 'bytes');
           
-          if (!videoBuffer.length) {
+          if (!videoPath.length) {
             throw new Error('Video file is empty. Please check the URL and try again.');
           }
           
@@ -220,7 +222,7 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
     
     try {
       await fs.mkdir(path.join(__dirname, '..', 'temp'), { recursive: true });
-      await fs.writeFile(tempFilePath, videoBuffer);
+      await fs.writeFile(tempFilePath, videoPath);
       console.log('Video saved to temporary file:', tempFilePath);
       
       const fileStats = await fs.stat(tempFilePath);
@@ -254,14 +256,12 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
       throw new Error(`Failed to create Twitter upload client: ${clientError.message}`);
     }
     
-    // Upload the media
-    console.log('Uploading media to Twitter...');
+    // Upload the video to Twitter
+    console.log('Uploading video to Twitter...');
     let mediaId;
     
     try {
-      console.log('Using chunked upload for video file');
-      
-      const MAX_RETRIES = 3;
+      const MAX_RETRIES = 7;
       let retryCount = 0;
       
       while (retryCount < MAX_RETRIES) {
@@ -308,28 +308,26 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
       throw new Error(`Failed to upload media to Twitter: ${uploadError.message}`);
     }
     
-    // Post the tweet using OAuth 2.0 client
-    console.log('Posting tweet with media using OAuth 2.0...');
-    let tweet;
+    // Post the tweet with the uploaded media
+    console.log('Posting tweet with video...');
+    let tweetResponse;
     
     try {
-      const oauth2Client = new TwitterApi(accessToken);
-      
-      const MAX_RETRIES = 3;
+      const MAX_RETRIES = 7;
       let retryCount = 0;
       
       while (retryCount < MAX_RETRIES) {
         try {
           console.log(`Attempt ${retryCount + 1} of ${MAX_RETRIES} to post tweet...`);
           
-          tweet = await oauth2Client.v2.tweet({
+          tweetResponse = await uploadClient.v2.tweet({
             text: text || '',
             media: {
               media_ids: [mediaId]
             }
           });
           
-          console.log('Tweet posted successfully:', tweet);
+          console.log('Tweet posted successfully:', tweetResponse);
           break;
         } catch (error) {
           retryCount++;
@@ -356,7 +354,7 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
     }
     
     console.log('=== TWITTER POSTING PROCESS END ===');
-    return tweet;
+    return tweetResponse;
   } catch (error) {
     console.error('=== TWITTER POSTING PROCESS ERROR ===');
     console.error('Error:', error.message);
@@ -373,17 +371,26 @@ async function getUserInfo(accessToken) {
     // Create a Twitter client with the provided access token
     const twitterClient = new TwitterApi(accessToken);
     
-    // Get the user information
+    // Get the user information with expanded fields
     const userInfo = await twitterClient.v2.me({
-      'user.fields': ['id', 'name', 'username', 'profile_image_url', 'description', 'public_metrics'],
+      'user.fields': ['id', 'name', 'username', 'profile_image_url', 'description', 'public_metrics', 'verified', 'location', 'url'],
     });
     
-    console.log('User info retrieved successfully');
+    console.log('User info retrieved successfully:', {
+      has_data: !!userInfo?.data,
+      has_profile_image: !!userInfo?.data?.profile_image_url,
+      username: userInfo?.data?.username,
+      name: userInfo?.data?.name
+    });
     
     return userInfo?.data;
   } catch (error) {
     console.error('Error getting user info:', error?.message);
-    throw new Error(`Failed to get user info: ${error?.message}`);
+    if (error?.code === 401 || error?.message?.includes('unauthorized') || error?.message?.includes('Unauthorized')) {
+      console.error('Authentication error when getting user info, token may have expired');
+      throw new Error('Authentication failed, please reconnect your Twitter account');
+    }
+    throw new Error(`Failed to get user info: ${error?.message || 'Unknown error'}`);
   }
 }
 

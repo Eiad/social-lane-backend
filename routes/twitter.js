@@ -39,6 +39,13 @@ router.get('/callback', async (req, res) => {
   try {
     const { code, state, error, error_description } = req?.query || {};
     
+    console.log('Twitter callback received:', { 
+      hasCode: !!code,
+      hasState: !!state,
+      error: error || 'none',
+      error_description: error_description || 'none' 
+    });
+    
     // Handle error from Twitter
     if (error) {
       console.error('Twitter auth error:', error, error_description);
@@ -51,8 +58,9 @@ router.get('/callback', async (req, res) => {
     }
     
     if (!state || !codeVerifiers.has(state)) {
-      console.error('Invalid or expired state parameter');
-      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Invalid or expired state parameter')}`);
+      console.error('Invalid or expired state parameter:', state);
+      console.error('Available states:', Array.from(codeVerifiers.keys()));
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Invalid or expired authorization session. Please try again.')}`);
     }
     
     // Get the code verifier for this state
@@ -66,7 +74,7 @@ router.get('/callback', async (req, res) => {
     
     if (!tokenData?.access_token) {
       console.error('Token exchange failed:', tokenData?.error || 'Unknown error');
-      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent(tokenData?.error || 'Token exchange failed')}`);
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Failed to obtain access token. Please try again.')}`);
     }
     
     console.log('Token exchange successful, received tokens:', {
@@ -179,6 +187,48 @@ router.post('/refresh-token', async (req, res) => {
   } catch (error) {
     console.error('Error refreshing token:', error?.message);
     res.status(500).json({ error: 'Failed to refresh token: ' + (error?.message || 'Unknown error') });
+  }
+});
+
+// GET /twitter/refresh-credentials
+router.get('/refresh-credentials', async (req, res) => {
+  try {
+    // Check if we have the required tokens in the query parameters
+    const refreshToken = req.query?.refreshToken;
+    
+    if (!refreshToken) {
+      return res.status(400).json({ error: 'Refresh token is required' });
+    }
+    
+    console.log('Refreshing Twitter credentials for user-initiated request');
+    
+    // Attempt to refresh the tokens
+    const tokenData = await twitterService.refreshAccessToken(refreshToken);
+    
+    if (!tokenData?.access_token) {
+      console.error('Failed to refresh Twitter credentials');
+      return res.status(500).json({ 
+        success: false,
+        error: 'Failed to refresh Twitter credentials'
+      });
+    }
+    
+    console.log('Twitter credentials refreshed successfully');
+    
+    // Return the refreshed tokens
+    return res.json({
+      success: true,
+      data: {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token
+      }
+    });
+  } catch (error) {
+    console.error('Error refreshing Twitter credentials:', error?.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to refresh Twitter credentials: ' + (error?.message || 'Unknown error')
+    });
   }
 });
 

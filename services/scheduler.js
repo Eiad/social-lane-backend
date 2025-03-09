@@ -83,7 +83,8 @@ const processPost = async (post) => {
     tiktok_access_token,
     tiktok_refresh_token,
     twitter_access_token,
-    twitter_access_token_secret
+    twitter_access_token_secret,
+    twitter_refresh_token
   } = post;
   
   if (!video_url || !platforms || platforms.length === 0) {
@@ -97,57 +98,79 @@ const processPost = async (post) => {
     has_tiktok_accounts: !!tiktok_accounts,
     tiktok_accounts_count: tiktok_accounts?.length || 0,
     has_legacy_tiktok: !!tiktok_access_token,
-    has_twitter: !!twitter_access_token && !!twitter_access_token_secret
+    has_twitter: !!twitter_access_token && !!twitter_access_token_secret,
+    has_twitter_refresh: !!twitter_refresh_token
   });
   
   const results = {};
+  let tokenUpdates = {};
   
-  // Process each platform sequentially
   for (const platform of platforms) {
     try {
-      console.log(`Processing platform: ${platform}`);
+      console.log('Processing platform:', platform);
+      
+      // Add delay between platforms if not the first platform
+      if (platform !== platforms[0]) {
+        const platformName = platform.charAt(0).toUpperCase() + platform.slice(1);
+        console.log(`Waiting 5 seconds for next social media platform post (${platformName})`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
       
       if (platform === 'tiktok') {
-        // Check if we have the new format (tiktok_accounts array)
-        if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
-          // Post to all selected TikTok accounts
+        // TikTok posting logic (multiple accounts)
+        if (tiktok_accounts && tiktok_accounts.length > 0) {
           console.log(`Found ${tiktok_accounts.length} TikTok accounts to post to`);
-          results.tiktok = [];
           
-          // Debug log each account structure
-          tiktok_accounts.forEach((acc, idx) => {
-            console.log(`TikTok account ${idx + 1}:`, {
-              openId: acc.openId,
-              hasAccessToken: !!acc.accessToken,
-              hasRefreshToken: !!acc.refreshToken
+          const accountResults = [];
+          
+          for (let i = 0; i < tiktok_accounts.length; i++) {
+            const account = tiktok_accounts[i];
+            console.log(`TikTok account ${i + 1}:`, {
+              openId: account.openId,
+              hasAccessToken: !!account.accessToken,
+              hasRefreshToken: !!account.refreshToken
             });
-          });
-          
-          for (const account of tiktok_accounts) {
+            
             try {
               console.log(`Posting to TikTok account with ID ${account.openId}`);
-              const tiktokResult = await postToTikTok(
+              const accountResult = await postToTikTok(
                 video_url, 
                 post_description, 
                 account.accessToken, 
                 account.refreshToken
               );
-              results.tiktok.push({ 
+              
+              accountResults.push({ 
                 success: true, 
                 accountId: account.openId,
-                ...tiktokResult 
+                ...accountResult 
               });
+              
               console.log(`TikTok posting completed successfully for account ${account.openId}`);
+              
+              // Add a 5-second delay between accounts if not the last account
+              if (i < tiktok_accounts.length - 1) {
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${tiktok_accounts[i+1].openId})`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
             } catch (accountError) {
               console.error(`Error posting to TikTok account ${account.openId}:`, accountError?.message);
-              results.tiktok.push({ 
+              accountResults.push({ 
                 success: false, 
                 accountId: account.openId,
                 error: accountError?.message 
               });
+              
+              // Still add delay even if posting failed
+              if (i < tiktok_accounts.length - 1) {
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${tiktok_accounts[i+1].openId})`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
             }
           }
-        } 
+          
+          results.tiktok = accountResults;
+        }
         // Fallback to legacy single account
         else if (tiktok_access_token) {
           console.log('Using legacy TikTok credentials format');
@@ -182,12 +205,18 @@ const processPost = async (post) => {
           console.log('Posting to Twitter with credentials:', { 
             hasAccessToken: !!twitter_access_token, 
             hasAccessTokenSecret: !!twitter_access_token_secret,
-            accessTokenPrefix: twitter_access_token ? twitter_access_token.substring(0, 5) + '...' : 'missing',
-            accessTokenSecretPrefix: twitter_access_token_secret ? twitter_access_token_secret.substring(0, 5) + '...' : 'missing'
+            hasRefreshToken: !!twitter_refresh_token
           });
           
-          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret);
+          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret, twitter_refresh_token);
           results.twitter = { success: true, ...twitterResult };
+          
+          // Check if tokens were refreshed and store them for later update
+          if (twitterResult?.refreshed && twitterResult?.newAccessToken) {
+            console.log('Twitter tokens were refreshed, will update post with new tokens');
+            tokenUpdates.twitter_access_token = twitterResult.newAccessToken;
+          }
+          
           console.log('Twitter posting completed successfully');
         } catch (twitterError) {
           console.error('Error posting to Twitter:', twitterError?.message);
@@ -204,7 +233,25 @@ const processPost = async (post) => {
   }
   
   // Check if any platform was successful
-  const anySuccess = Object.values(results).some(result => result?.success);
+  const anySuccess = Object.values(results).some(result => {
+    if (Array.isArray(result)) {
+      return result.some(r => r?.success);
+    }
+    return result?.success;
+  });
+  
+  // Update tokens if they were refreshed
+  if (Object.keys(tokenUpdates).length > 0 && post._id) {
+    try {
+      console.log('Updating post with refreshed tokens:', Object.keys(tokenUpdates).join(', '));
+      await Post.updateOne({ _id: post._id }, tokenUpdates);
+      console.log('Updated post with refreshed tokens successfully');
+    } catch (updateError) {
+      console.error('Error updating post with refreshed tokens:', updateError?.message);
+      // Continue anyway, the post was still published
+    }
+  }
+  
   if (!anySuccess) {
     throw new Error('Failed to post to any platform');
   }
@@ -230,34 +277,89 @@ const postToTikTok = async (videoUrl, caption, accessToken, refreshToken) => {
 };
 
 // Post to Twitter
-const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret) => {
+const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, twitter_refresh_token) => {
   try {
     console.log('Posting to Twitter with credentials:', {
       hasAccessToken: !!accessToken,
-      hasAccessTokenSecret: !!accessTokenSecret
+      hasAccessTokenSecret: !!accessTokenSecret,
+      hasRefreshToken: !!twitter_refresh_token
     });
     
-    const response = await axios.post(`${process.env.BACKEND_URL}/twitter/post-video`, {
-      videoUrl,
-      text,
-      accessToken,
-      accessTokenSecret
-    });
-    
-    console.log('Twitter API response:', response?.status, response?.statusText);
-    
-    if (!response?.data?.message) {
-      console.warn('Twitter API response missing expected data:', response?.data);
+    // Try using the existing tokens first
+    try {
+      const response = await axios.post(`${process.env.BACKEND_URL}/twitter/post-video`, {
+        videoUrl,
+        text,
+        accessToken,
+        accessTokenSecret
+      });
+      
+      console.log('Twitter API response:', response?.status, response?.statusText);
+      
+      if (!response?.data?.message) {
+        console.warn('Twitter API response missing expected data:', response?.data);
+      }
+      
+      return { success: true, data: response?.data };
+    } catch (error) {
+      // Check if this is an authentication error and we have a refresh token
+      if (error?.response?.status === 401 && twitter_refresh_token) {
+        console.log('Twitter authentication failed, attempting to refresh token...');
+        
+        try {
+          // Attempt to refresh the token
+          const refreshResponse = await axios.post(`${process.env.BACKEND_URL}/twitter/refresh-token`, {
+            refreshToken: twitter_refresh_token
+          });
+          
+          if (refreshResponse?.data?.data?.access_token) {
+            console.log('Twitter token refreshed successfully, retrying with new token');
+            
+            // Update the tokens
+            const newAccessToken = refreshResponse.data.data.access_token;
+            
+            // Try again with the new token
+            const retryResponse = await axios.post(`${process.env.BACKEND_URL}/twitter/post-video`, {
+              videoUrl,
+              text,
+              accessToken: newAccessToken,
+              accessTokenSecret
+            });
+            
+            console.log('Twitter API retry response:', retryResponse?.status, retryResponse?.statusText);
+            
+            // Return the updated tokens along with the success response
+            return { 
+              success: true, 
+              data: retryResponse?.data,
+              refreshed: true,
+              newAccessToken
+            };
+          } else {
+            console.error('Token refresh failed, no new access token received');
+            throw new Error('Failed to refresh Twitter token');
+          }
+        } catch (refreshError) {
+          console.error('Error refreshing Twitter token:', refreshError?.message);
+          throw new Error(`Failed to refresh Twitter token: ${refreshError?.message || 'Unknown error'}`);
+        }
+      } else {
+        // Not an auth error or no refresh token, rethrow
+        console.error('Error posting to Twitter:', error?.message);
+        if (error?.response) {
+          console.error('Twitter API error response:', error.response?.status, error.response?.statusText);
+          console.error('Twitter API error data:', error.response?.data);
+        }
+        throw new Error(`Failed to post to Twitter: ${error?.message || 'Unknown error'}`);
+      }
     }
-    
-    return { success: true, data: response?.data };
   } catch (error) {
     console.error('Error posting to Twitter:', error?.message);
     if (error?.response) {
-      console.error('Twitter API error response:', error.response.status, error.response.statusText);
+      console.error('Twitter API error response:', error.response?.status, error.response?.statusText);
       console.error('Twitter API error data:', error.response?.data);
     }
-    throw new Error(`Failed to post to Twitter: ${error?.message}`);
+    throw new Error(`Failed to post to Twitter: ${error?.message || 'Unknown error'}`);
   }
 };
 

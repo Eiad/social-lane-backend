@@ -69,6 +69,9 @@ const PostSchema = new mongoose.Schema({
   },
   twitter_access_token_secret: {
     type: String
+  },
+  twitter_refresh_token: {
+    type: String
   }
 }, {
   timestamps: true

@@ -34,6 +34,22 @@ const UserSchema = new mongoose.Schema({
   subscriptionEndDate: {
     type: Date
   },
+  // PayPal subscription details
+  subscription: {
+    paypalSubscriptionId: String,
+    status: {
+      type: String,
+      enum: ['APPROVAL_PENDING', 'APPROVED', 'ACTIVE', 'SUSPENDED', 'CANCELLED', 'EXPIRED', 'INACTIVE'],
+    },
+    planId: String,
+    createdAt: Date,
+    updatedAt: Date,
+    nextBillingTime: Date,
+    failedPayments: {
+      type: Number,
+      default: 0
+    }
+  },
   // Store payment information for reference
   paymentHistory: [{
     amount: Number,
@@ -73,5 +89,6 @@ const UserSchema = new mongoose.Schema({
 UserSchema.index({ uid: 1 });
 UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1 });
+UserSchema.index({ 'subscription.paypalSubscriptionId': 1 });
 
 module.exports = mongoose.model('User', UserSchema); 

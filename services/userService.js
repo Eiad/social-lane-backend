@@ -49,6 +49,7 @@ const createOrUpdateUser = async (userData) => {
  */
 const getUserByUid = async (uid) => {
   try {
+    // Make sure we get the full user object including providerData
     const user = await User.findOne({ uid });
     return user;
   } catch (error) {
@@ -106,9 +107,44 @@ const isUserPro = async (uid) => {
   }
 };
 
+/**
+ * Update user's social media tokens
+ * @param {string} uid - User's Firebase UID
+ * @param {string} platform - Social media platform (twitter, tiktok)
+ * @param {Object} tokenData - Token data to store
+ * @returns {Promise<Object>} - The updated user
+ */
+const updateSocialMediaTokens = async (uid, platform, tokenData) => {
+  if (!uid || !platform || !tokenData) {
+    throw new Error('User ID, platform, and token data are required');
+  }
+  
+  try {
+    const updateQuery = {};
+    const updatePath = `providerData.${platform}`;
+    updateQuery[updatePath] = tokenData;
+    
+    const user = await User.findOneAndUpdate(
+      { uid },
+      { $set: updateQuery },
+      { new: true, runValidators: true }
+    );
+    
+    if (!user) {
+      throw new Error('User not found');
+    }
+    
+    return user;
+  } catch (error) {
+    console.error(`Error updating ${platform} tokens for user ${uid}:`, error);
+    throw error;
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
   updateUserRole,
-  isUserPro
+  isUserPro,
+  updateSocialMediaTokens
 }; 

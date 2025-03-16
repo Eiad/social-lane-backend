@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const Post = require('../models/Post');
+const User = require('../models/User');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 
@@ -69,7 +70,73 @@ const initScheduler = () => {
     }
   });
   
+  // Run every 15 minutes to check for expired subscriptions
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const now = new Date();
+      console.log('Running subscription expiration check at', now.toISOString());
+      
+      // Find users with Pro role and expired subscriptionEndDate
+      const expiredUsers = await User.find({
+        role: 'Pro',
+        subscriptionEndDate: { $lt: now },
+        'subscription.status': 'CANCELLED'
+      });
+      
+      console.log(`Query criteria: role='Pro', subscriptionEndDate < ${now.toISOString()}, subscription.status='CANCELLED'`);
+      
+      if (expiredUsers.length > 0) {
+        console.log(`Found ${expiredUsers.length} users with expired Pro subscriptions`);
+        
+        // Log all expired users for debugging
+        expiredUsers.forEach(user => {
+          console.log(`Expired subscription: User ${user.uid} (${user.email}), Role: ${user.role}, End date: ${user.subscriptionEndDate}, Current date: ${now.toISOString()}`);
+        });
+        
+        // Downgrade each user
+        for (const user of expiredUsers) {
+          try {
+            console.log(`Downgrading user ${user.uid} from Pro to Free (subscription ended on ${user.subscriptionEndDate})`);
+            
+            await User.updateOne(
+              { _id: user._id },
+              { 
+                role: 'Free',
+                $set: {
+                  'subscription.status': 'EXPIRED'
+                }
+              }
+            );
+            
+            console.log(`Successfully downgraded user ${user.uid} to Free plan`);
+          } catch (error) {
+            console.error(`Error downgrading user ${user.uid}:`, error?.message);
+          }
+        }
+      } else {
+        console.log('No users with expired Pro subscriptions found');
+        
+        // For debugging, find all Pro users with CANCELLED status
+        const allCancelledProUsers = await User.find({
+          role: 'Pro',
+          'subscription.status': 'CANCELLED'
+        });
+        
+        console.log(`Found ${allCancelledProUsers.length} Pro users with CANCELLED status`);
+        
+        allCancelledProUsers.forEach(user => {
+          const endDate = user.subscriptionEndDate;
+          const isExpired = endDate && endDate < now;
+          console.log(`Cancelled Pro user: ${user.uid} (${user.email}), End date: ${endDate}, Current date: ${now.toISOString()}, Is expired: ${isExpired}`);
+        });
+      }
+    } catch (error) {
+      console.error('Error in subscription expiration checker:', error?.message);
+    }
+  });
+  
   console.log('Post scheduler initialized');
+  console.log('Subscription expiration checker initialized');
 };
 
 // Process a post by publishing to selected platforms

@@ -8,6 +8,8 @@ const twitterRoutes = require('./routes/twitter');
 const uploadRoutes = require('./routes/upload');
 const postsRoutes = require('./routes/posts');
 const usersRoutes = require('./routes/users');
+const paypalRoutes = require('./routes/paypal');
+const rawBodyParser = require('./middleware/rawBodyParser');
 
 const app = express();
 const port = process.env.PORT || 3335;
@@ -75,6 +77,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Raw body parser middleware for PayPal webhooks
+app.use(rawBodyParser);
+
 // Parse JSON bodies
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -121,6 +126,7 @@ app.use('/twitter', twitterRoutes);
 app.use('/upload', uploadRoutes);
 app.use('/posts', postsRoutes);
 app.use('/users', usersRoutes);
+app.use('/paypal', paypalRoutes);
 
 // TikTok domain verification file
 app.get('/tiktokxhM8HSGWC6UXDSySEBMtLOBidATHhofG.txt', (req, res) => {

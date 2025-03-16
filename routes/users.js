@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const userService = require('../services/userService');
 
 // Get all users (with pagination)
 router.get('/', async (req, res) => {
@@ -46,6 +47,7 @@ router.get('/:uid', async (req, res) => {
       });
     }
 
+    // Return the complete user object
     res.status(200).json({
       success: true,
       data: user
@@ -229,6 +231,62 @@ router.delete('/:uid', async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting user:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// Update user's Twitter tokens
+router.post('/:uid/social/twitter', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const tokenData = req.body;
+    
+    if (!tokenData || !tokenData.accessToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Twitter token data is required'
+      });
+    }
+    
+    const user = await userService.updateSocialMediaTokens(uid, 'twitter', tokenData);
+    
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    console.error('Error updating Twitter tokens:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// Update user's TikTok tokens
+router.post('/:uid/social/tiktok', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const tokenData = req.body;
+    
+    if (!tokenData || !Array.isArray(tokenData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'TikTok token data should be an array'
+      });
+    }
+    
+    const user = await userService.updateSocialMediaTokens(uid, 'tiktok', tokenData);
+    
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    console.error('Error updating TikTok tokens:', error);
     res.status(500).json({
       success: false,
       error: 'Server error'

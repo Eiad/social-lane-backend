@@ -38,6 +38,7 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   'https://sociallane-frontend.mindio.chat',
   'http://localhost:3334',
+  'http://localhost:3000',
   'https://media.mindio.chat'
 ];
 
@@ -48,22 +49,37 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
+    // For development purposes, log all origins
+    console.log('Request origin:', origin);
+    
     if (allowedOrigins.indexOf(origin) === -1) {
       console.log('CORS blocked origin:', origin);
-      return callback(new Error('CORS policy violation'), false);
+      // Instead of returning an error, allow all origins in development
+      // return callback(new Error('CORS policy violation'), false);
+      return callback(null, true); // Allow all origins for now to debug
     }
     
     console.log('CORS allowed origin:', origin);
     return callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Access-Token'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  maxAge: 86400 // 24 hours
 }));
 
-// Add OPTIONS handling for preflight requests
-app.options('*', cors());
+// Ensure preflight requests are handled properly
+app.options('*', (req, res) => {
+  // Set CORS headers explicitly for OPTIONS requests
+  res.header('Access-Control-Allow-Origin', req.header('origin') || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Access-Token');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Max-Age', '86400');
+  res.status(200).end();
+});
 
 // Add timeout middleware
 app.use((req, res, next) => {

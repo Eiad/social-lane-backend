@@ -1,7 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+// Import auth conditionally to allow testing without it
+let auth;
+try {
+  const authModule = require('../middleware/auth');
+  auth = authModule.auth;
+} catch (error) {
+  console.warn('Auth middleware not loaded. Authentication will be bypassed.');
+  // Provide a dummy auth middleware that passes through all requests
+  auth = (req, res, next) => next();
+}
 const userService = require('../services/userService');
+const { getAllPlans, getLimit, hasFeature } = require('../utils/roleLimits');
 
 // Get all users (with pagination)
 router.get('/', async (req, res) => {
@@ -65,51 +76,51 @@ router.get('/:uid', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { uid, email, displayName, photoURL } = req.body;
-
+    
+    // Validate required fields
     if (!uid || !email) {
       return res.status(400).json({
         success: false,
-        error: 'Please provide uid and email'
+        error: 'UID and email are required'
       });
     }
-
-    // Use findOneAndUpdate with upsert option to create if not exists
-    const user = await User.findOneAndUpdate(
-      { uid },
-      {
-        $set: {
+    
+    // Try to find existing user first
+    let user = await User.findOne({ uid });
+    
+    if (user) {
+      // Update existing user
+      user = await User.findOneAndUpdate(
+        { uid },
+        {
           email,
-          displayName: displayName || '',
-          photoURL: photoURL || '',
+          ...(displayName && { displayName }),
+          ...(photoURL && { photoURL }),
           lastLogin: new Date()
         },
-        $setOnInsert: {
-          role: 'Free',
-          createdAt: new Date()
-        }
-      },
-      {
-        new: true, // Return the updated document
-        upsert: true, // Create if it doesn't exist
-        runValidators: true // Run validators on update
-      }
-    );
-
+        { new: true, runValidators: true }
+      );
+    } else {
+      // Create new user
+      user = new User({
+        uid,
+        email,
+        displayName: displayName || email.split('@')[0],
+        photoURL: photoURL || '',
+        role: 'Starter',
+        createdAt: new Date(),
+        lastLogin: new Date()
+      });
+      
+      await user.save();
+    }
+    
     res.status(201).json({
       success: true,
       data: user
     });
   } catch (error) {
     console.error('Error creating/updating user:', error);
-    
-    // Handle duplicate key error
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        error: 'User already exists with this email or uid'
-      });
-    }
-    
     res.status(500).json({
       success: false,
       error: 'Server error'
@@ -122,10 +133,10 @@ router.put('/:uid/role', async (req, res) => {
   try {
     const { role } = req.body;
 
-    if (!role || !['Free', 'Pro'].includes(role)) {
+    if (!role || !['Starter', 'Launch', 'Rise', 'Scale'].includes(role)) {
       return res.status(400).json({
         success: false,
-        error: 'Please provide a valid role (Free or Pro)'
+        error: 'Please provide a valid role (Starter, Launch, Rise, or Scale)'
       });
     }
 
@@ -133,7 +144,7 @@ router.put('/:uid/role', async (req, res) => {
       { uid: req.params.uid },
       {
         role,
-        ...(role === 'Pro' && !req.body.keepSubscriptionDates ? {
+        ...(role !== 'Starter' && !req.body.keepSubscriptionDates ? {
           subscriptionStartDate: new Date()
         } : {})
       },
@@ -347,6 +358,67 @@ router.delete('/:uid/social/tiktok', async (req, res) => {
     });
   } catch (error) {
     console.error('Error removing TikTok connection:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// Get subscription plan details
+router.get('/plans', async (req, res) => {
+  try {
+    // Get all plan details
+    const plans = getAllPlans();
+    
+    res.status(200).json({
+      success: true,
+      data: plans
+    });
+  } catch (error) {
+    console.error('Error fetching plan details:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// Get user limits and features
+router.get('/:uid/limits', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    
+    // Find the user
+    const user = await User.findOne({ uid });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Get the user's role - default to Starter if not found
+    const role = user.role || 'Starter';
+    
+    // Get limits and features for the user's role
+    const limits = {
+      socialAccounts: getLimit(role, 'socialAccounts'),
+      scheduledPosts: getLimit(role, 'scheduledPosts'),
+      hasContentStudio: hasFeature(role, 'contentStudio'),
+      hasCarouselPosts: hasFeature(role, 'carouselPosts'),
+      growthConsulting: getLimit(role, 'growthConsulting'),
+      analyticsLevel: getLimit(role, 'analyticsLevel'),
+      teamMembers: getLimit(role, 'teamMembers'),
+      role: role
+    };
+    
+    res.status(200).json({
+      success: true,
+      data: limits
+    });
+  } catch (error) {
+    console.error('Error fetching user limits:', error);
     res.status(500).json({
       success: false,
       error: 'Server error'

@@ -10,9 +10,20 @@ class PayPalService {
       : 'https://api-m.sandbox.paypal.com';
     this.clientId = process.env.PAYPAL_CLIENT_ID;
     this.clientSecret = process.env.PAYPAL_SECRET;
-    this.planId = process.env.NODE_ENV === 'production' 
-      ? 'P-6G167743VS6723099OOSIGY' 
-      : 'P-6G167743VS6723046M7HSIGY';
+    
+    // Plan IDs for each subscription tier
+    this.planIds = {
+      Launch: process.env.NODE_ENV === 'production' 
+        ? 'P-6G167743VS6723099OOSIGY' // Keep existing Pro plan ID as Launch
+        : 'P-6G167743VS6723046M7HSIGY', // Keep existing sandbox plan ID as Launch
+      Rise: process.env.NODE_ENV === 'production'
+        ? process.env.PAYPAL_RISE_PLAN_ID || 'P-RISE_PLAN_ID'
+        : process.env.PAYPAL_RISE_PLAN_ID_SANDBOX || 'P-RISE_PLAN_ID_SANDBOX',
+      Scale: process.env.NODE_ENV === 'production'
+        ? process.env.PAYPAL_SCALE_PLAN_ID || 'P-SCALE_PLAN_ID'
+        : process.env.PAYPAL_SCALE_PLAN_ID_SANDBOX || 'P-SCALE_PLAN_ID_SANDBOX'
+    };
+    
     this.accessToken = null;
     this.tokenExpiry = null;
   }
@@ -62,12 +73,23 @@ class PayPalService {
    * @param {Object} options - Subscription options
    * @param {string} options.returnUrl - URL to redirect after approval
    * @param {string} options.cancelUrl - URL to redirect if canceled
+   * @param {string} options.planTier - Subscription tier (Launch, Rise, or Scale)
    * @returns {Promise<Object>} Subscription details with approval URL
    */
   async createSubscription(options) {
     try {
       console.log('Creating PayPal subscription with options:', options);
       const token = await this.getAccessToken();
+      
+      // Default to Launch tier if not specified
+      const planTier = options.planTier || 'Launch';
+      const planId = this.planIds[planTier];
+      
+      if (!planId) {
+        throw new Error(`Invalid plan tier: ${planTier}`);
+      }
+      
+      console.log(`Using plan ID for ${planTier} tier: ${planId}`);
       
       const response = await axios({
         method: 'post',
@@ -78,7 +100,7 @@ class PayPalService {
           'PayPal-Request-Id': `subscription-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         },
         data: {
-          plan_id: this.planId,
+          plan_id: planId,
           application_context: {
             brand_name: 'Social Lane',
             locale: 'en-US',
@@ -220,6 +242,20 @@ class PayPalService {
       console.error('Error verifying PayPal webhook:', error?.response?.data || error.message);
       return false;
     }
+  }
+
+  /**
+   * Get the subscription tier from plan ID
+   * @param {string} planId - PayPal plan ID
+   * @returns {string} Subscription tier (Launch, Rise, Scale or Starter if unknown)
+   */
+  getPlanTierFromId(planId) {
+    for (const [tier, id] of Object.entries(this.planIds)) {
+      if (id === planId) {
+        return tier;
+      }
+    }
+    return 'Starter'; // Default to Starter if plan ID not recognized
   }
 }
 

@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
+const { processPost, checkUserLimits } = require('../services/scheduler');
+const { hasReachedLimit } = require('../utils/roleLimits');
+const User = require('../models/User');
 
 // @route   GET /posts
 // @desc    Get all posts
@@ -76,66 +79,108 @@ router.get('/user/:userId', async (req, res) => {
 // @access  Public (should be Private in production)
 router.post('/', async (req, res) => {
   try {
-    console.log('Received POST request to /posts');
-    
+    // Extract data from request
     const { 
       video_url, 
       video_id,
       post_description, 
       platforms, 
-      userId,
-      isScheduled,
+      userId, 
+      isScheduled, 
       scheduledDate,
       tiktok_access_token,
       tiktok_refresh_token,
       tiktok_accounts,
       twitter_access_token,
       twitter_access_token_secret,
-      twitter_refresh_token
+      twitter_refresh_token,
+      twitter_accounts
     } = req.body;
-    
+
     // Validate required fields
-    if (!platforms || !Array.isArray(platforms) || platforms.length === 0) {
-      console.error('Missing or invalid platforms field');
-      return res.status(400).json({ error: 'Platforms field is required and must be a non-empty array' });
+    if (!video_url || !post_description || !platforms || !userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide required fields: video_url, post_description, platforms, userId'
+      });
     }
-    
-    if (!userId) {
-      console.error('Missing userId field');
-      return res.status(400).json({ error: 'User ID is required' });
+
+    // Check if it's a scheduled post
+    if (isScheduled) {
+      // Check user limits for scheduled posts
+      const user = await User.findOne({ uid: userId });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      // Count existing scheduled posts for this user
+      const scheduledPostsCount = await Post.countDocuments({
+        userId,
+        isScheduled: true,
+        status: 'pending'
+      });
+
+      // Check if user has reached their limit
+      if (hasReachedLimit(user.role || 'Starter', 'scheduledPosts', scheduledPostsCount)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Scheduled posts limit reached',
+          limit: user.role === 'Starter' ? 30 : 'unlimited',
+          current: scheduledPostsCount
+        });
+      }
     }
-    
-    if (!post_description) {
-      console.error('Missing post_description field');
-      return res.status(400).json({ error: 'Post description is required' });
+
+    // Check social accounts limit
+    if (platforms.includes('tiktok') || platforms.includes('twitter')) {
+      const user = await User.findOne({ uid: userId });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      // Count social accounts
+      let socialAccountsCount = 0;
+      
+      // Count TikTok accounts
+      if (tiktok_accounts && Array.isArray(tiktok_accounts)) {
+        socialAccountsCount += tiktok_accounts.length;
+      } else if (tiktok_access_token) {
+        socialAccountsCount += 1;
+      }
+      
+      // Count Twitter accounts
+      if (twitter_accounts && Array.isArray(twitter_accounts)) {
+        socialAccountsCount += twitter_accounts.length;
+      } else if (twitter_access_token) {
+        socialAccountsCount += 1;
+      }
+      
+      // Check if user has reached their limit
+      if (hasReachedLimit(user.role || 'Starter', 'socialAccounts', socialAccountsCount)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Social accounts limit reached',
+          limit: user.role === 'Starter' ? 5 : (user.role === 'Launch' ? 15 : (user.role === 'Rise' ? 30 : 'unlimited')),
+          current: socialAccountsCount
+        });
+      }
     }
-    
-    if (!video_url && !video_id) {
-      console.error('Missing video_url or video_id field');
-      return res.status(400).json({ error: 'Either video URL or video ID is required' });
-    }
-    
-    console.log('Creating post with platforms:', platforms);
-    console.log('Post is scheduled:', isScheduled);
-    if (tiktok_accounts) {
-      console.log('TikTok accounts provided:', tiktok_accounts.length);
-      console.log('TikTok accounts data sample:', tiktok_accounts.map(acc => ({
-        openId: acc.openId,
-        hasAccessToken: !!acc.accessToken,
-        hasRefreshToken: !!acc.refreshToken
-      })));
-    }
-    
-    // Create new post object with only provided fields
+
+    // Prepare post data
     const postData = {
+      video_url,
       post_description,
       platforms,
-      userId,
-      date: new Date()
+      userId
     };
 
     // Add optional fields if they exist
-    if (video_url) postData.video_url = video_url;
     if (video_id) postData.video_id = video_id;
     if (isScheduled !== undefined) postData.isScheduled = isScheduled;
     if (scheduledDate) postData.scheduledDate = scheduledDate;
@@ -166,6 +211,11 @@ router.post('/', async (req, res) => {
     if (twitter_access_token_secret) postData.twitter_access_token_secret = twitter_access_token_secret;
     if (twitter_refresh_token) postData.twitter_refresh_token = twitter_refresh_token;
     
+    // Handle Twitter accounts array
+    if (twitter_accounts && Array.isArray(twitter_accounts) && twitter_accounts.length > 0) {
+      postData.twitter_accounts = twitter_accounts;
+    }
+    
     // Set status based on whether it's scheduled
     postData.status = isScheduled ? 'pending' : 'completed';
     
@@ -176,25 +226,46 @@ router.post('/', async (req, res) => {
     
     // Debug: Check if the saved post has the TikTok accounts
     const savedPost = await Post.findById(post._id).lean();
-    console.log('Saved post:', {
-      id: savedPost._id,
-      has_tiktok_accounts: !!savedPost.tiktok_accounts,
-      tiktok_accounts_count: savedPost.tiktok_accounts?.length || 0,
-      has_legacy_tiktok: !!savedPost.tiktok_access_token,
-      has_twitter: !!savedPost.twitter_access_token,
-      has_twitter_refresh: !!savedPost.twitter_refresh_token
-    });
-    
-    console.log('Post saved successfully with ID:', post._id);
-    res.json(post);
-  } catch (err) {
-    console.error('Error creating post:', err?.message);
-    if (err?.name === 'ValidationError') {
-      // Handle Mongoose validation errors
-      const validationErrors = Object.values(err.errors).map(error => error.message);
-      return res.status(400).json({ error: 'Validation error', details: validationErrors });
+    if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
+      console.log('Saved post TikTok accounts count:', savedPost.tiktok_accounts?.length || 0);
     }
-    res.status(500).json({ error: 'Server Error', message: err?.message });
+    
+    // If not scheduled, process post immediately
+    if (!isScheduled) {
+      console.log('Processing post immediately (not scheduled)...');
+      // Process the post (this could take some time, so we don't await it)
+      processPost(post)
+        .then(results => {
+          console.log('Post processing completed:', results);
+        })
+        .catch(error => {
+          console.error('Error processing post:', error);
+        });
+      
+      // Return success response without waiting for processing to complete
+      res.status(201).json({
+        success: true,
+        data: {
+          _id: post._id,
+          status: 'processing'
+        },
+        message: 'Post created and processing started'
+      });
+    } else {
+      // For scheduled posts, just return the created post
+      console.log('Post scheduled for later processing at:', scheduledDate);
+      res.status(201).json({
+        success: true,
+        data: post,
+        message: 'Post scheduled successfully'
+      });
+    }
+  } catch (error) {
+    console.error('Error creating post:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
   }
 });
 

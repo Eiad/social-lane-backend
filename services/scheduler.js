@@ -3,6 +3,7 @@ const Post = require('../models/Post');
 const User = require('../models/User');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const { hasReachedLimit } = require('../utils/roleLimits');
 
 // Initialize the scheduler
 const initScheduler = () => {
@@ -76,17 +77,17 @@ const initScheduler = () => {
       const now = new Date();
       console.log('Running subscription expiration check at', now.toISOString());
       
-      // Find users with Pro role and expired subscriptionEndDate
+      // Find users with Launch role and expired subscriptionEndDate
       const expiredUsers = await User.find({
-        role: 'Pro',
+        role: 'Launch',
         subscriptionEndDate: { $lt: now },
         'subscription.status': 'CANCELLED'
       });
       
-      console.log(`Query criteria: role='Pro', subscriptionEndDate < ${now.toISOString()}, subscription.status='CANCELLED'`);
+      console.log(`Query criteria: role='Launch', subscriptionEndDate < ${now.toISOString()}, subscription.status='CANCELLED'`);
       
       if (expiredUsers.length > 0) {
-        console.log(`Found ${expiredUsers.length} users with expired Pro subscriptions`);
+        console.log(`Found ${expiredUsers.length} users with expired Launch subscriptions`);
         
         // Log all expired users for debugging
         expiredUsers.forEach(user => {
@@ -96,38 +97,38 @@ const initScheduler = () => {
         // Downgrade each user
         for (const user of expiredUsers) {
           try {
-            console.log(`Downgrading user ${user.uid} from Pro to Free (subscription ended on ${user.subscriptionEndDate})`);
+            console.log(`Downgrading user ${user.uid} from Launch to Starter (subscription ended on ${user.subscriptionEndDate})`);
             
             await User.updateOne(
               { _id: user._id },
               { 
-                role: 'Free',
+                role: 'Starter',
                 $set: {
                   'subscription.status': 'EXPIRED'
                 }
               }
             );
             
-            console.log(`Successfully downgraded user ${user.uid} to Free plan`);
+            console.log(`Successfully downgraded user ${user.uid} to Starter plan`);
           } catch (error) {
             console.error(`Error downgrading user ${user.uid}:`, error?.message);
           }
         }
       } else {
-        console.log('No users with expired Pro subscriptions found');
+        console.log('No users with expired Launch subscriptions found');
         
-        // For debugging, find all Pro users with CANCELLED status
-        const allCancelledProUsers = await User.find({
-          role: 'Pro',
+        // For debugging, find all Launch users with CANCELLED status
+        const allCancelledLaunchUsers = await User.find({
+          role: 'Launch',
           'subscription.status': 'CANCELLED'
         });
         
-        console.log(`Found ${allCancelledProUsers.length} Pro users with CANCELLED status`);
+        console.log(`Found ${allCancelledLaunchUsers.length} Launch users with CANCELLED status`);
         
-        allCancelledProUsers.forEach(user => {
+        allCancelledLaunchUsers.forEach(user => {
           const endDate = user.subscriptionEndDate;
           const isExpired = endDate && endDate < now;
-          console.log(`Cancelled Pro user: ${user.uid} (${user.email}), End date: ${endDate}, Current date: ${now.toISOString()}, Is expired: ${isExpired}`);
+          console.log(`Cancelled Launch user: ${user.uid} (${user.email}), End date: ${endDate}, Current date: ${now.toISOString()}, Is expired: ${isExpired}`);
         });
       }
     } catch (error) {
@@ -507,7 +508,84 @@ const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, twi
   }
 };
 
+// Add a helper function to check user limits
+const checkUserLimits = async (userId, postType) => {
+  try {
+    // Find the user
+    const user = await User.findOne({ uid: userId });
+    if (!user) {
+      console.error(`User not found with ID: ${userId}`);
+      return { allowed: false, reason: 'User not found' };
+    }
+    
+    // Get user role - default to Starter if not set
+    const role = user.role || 'Starter';
+    
+    if (postType === 'scheduled') {
+      // Count user's existing scheduled posts
+      const scheduledPostsCount = await Post.countDocuments({ 
+        userId, 
+        isScheduled: true,
+        status: 'pending'
+      });
+      
+      // Check if user has reached their limit
+      if (hasReachedLimit(role, 'scheduledPosts', scheduledPostsCount)) {
+        console.log(`User ${userId} with role ${role} has reached scheduled posts limit`);
+        return { 
+          allowed: false, 
+          reason: 'Scheduled posts limit reached',
+          limit: role === 'Starter' ? 30 : 'unlimited',
+          current: scheduledPostsCount
+        };
+      }
+    }
+    
+    // All checks passed
+    return { allowed: true };
+  } catch (error) {
+    console.error('Error checking user limits:', error);
+    return { allowed: false, reason: 'Error checking limits' };
+  }
+};
+
+// Update the checkScheduledPosts function
+const checkScheduledPosts = async () => {
+  try {
+    const now = new Date();
+    console.log(`Running scheduler check at ${now.toISOString()}`);
+    
+    // Find posts that are scheduled and ready to be posted
+    const posts = await Post.find({
+      isScheduled: true,
+      status: 'pending',
+      scheduledDate: { $lte: now }
+    });
+    
+    console.log(`Found ${posts.length} scheduled posts ready to be posted`);
+    
+    // Process each post
+    for (const post of posts) {
+      console.log(`Processing scheduled post: ${post._id}, scheduled for ${post.scheduledDate}`);
+      
+      // Before processing, check if the user still has valid subscription
+      const user = await User.findOne({ uid: post.userId });
+      if (!user) {
+        console.error(`User not found for post ${post._id}`);
+        continue;
+      }
+      
+      // Process the post
+      await processPost(post);
+    }
+  } catch (error) {
+    console.error('Error in scheduler:', error);
+  }
+};
+
 module.exports = {
   initScheduler,
-  processPost  // Export processPost for testing
+  processPost,
+  checkUserLimits,
+  checkScheduledPosts
 }; 

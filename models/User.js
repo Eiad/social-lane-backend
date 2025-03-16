@@ -1,6 +1,14 @@
 const mongoose = require('mongoose');
 
-// Define User Schema
+/**
+ * User Schema
+ * 
+ * Note: Role system was migrated from Free/Pro to Starter/Launch/Rise/Scale
+ * - Starter (was Free): Free tier
+ * - Launch (was Pro): $9/month tier
+ * - Rise: $18/month tier
+ * - Scale: $27/month tier
+ */
 const UserSchema = new mongoose.Schema({
   uid: {
     type: String,
@@ -23,8 +31,8 @@ const UserSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['Free', 'Pro'],
-    default: 'Free'
+    enum: ['Starter', 'Launch', 'Rise', 'Scale'],
+    default: 'Starter'
   },
   // Useful for tracking when subscription started
   subscriptionStartDate: {
@@ -85,10 +93,7 @@ const UserSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for faster queries
-UserSchema.index({ uid: 1 });
-UserSchema.index({ email: 1 });
+// Create only necessary indexes (removed duplicates)
 UserSchema.index({ role: 1 });
-UserSchema.index({ 'subscription.paypalSubscriptionId': 1 });
 
 module.exports = mongoose.model('User', UserSchema); 

@@ -24,7 +24,7 @@ const createOrUpdateUser = async (userData) => {
           lastLogin: new Date()
         },
         $setOnInsert: {
-          role: 'Free',
+          role: 'Starter',
           createdAt: new Date()
         }
       },
@@ -61,12 +61,12 @@ const getUserByUid = async (uid) => {
 /**
  * Update a user's role
  * @param {string} uid - Firebase UID
- * @param {string} role - New role ('Free' or 'Pro')
+ * @param {string} role - New role ('Starter', 'Launch', 'Rise', or 'Scale')
  * @returns {Promise<Object|null>} - The updated user or null if not found
  */
 const updateUserRole = async (uid, role) => {
-  if (!['Free', 'Pro'].includes(role)) {
-    throw new Error('Invalid role. Must be either "Free" or "Pro"');
+  if (!['Starter', 'Launch', 'Rise', 'Scale'].includes(role)) {
+    throw new Error('Invalid role. Must be one of: Starter, Launch, Rise, Scale');
   }
   
   try {
@@ -74,8 +74,8 @@ const updateUserRole = async (uid, role) => {
       role
     };
     
-    // If upgrading to Pro, set subscription start date
-    if (role === 'Pro') {
+    // If upgrading from Starter, set subscription start date
+    if (role !== 'Starter') {
       updates.subscriptionStartDate = new Date();
     }
     
@@ -284,6 +284,34 @@ const removeTwitterAccount = async (uid, userId) => {
   }
 };
 
+/**
+ * Create a new user
+ * @param {Object} userData - User data including uid, email, displayName
+ * @returns {Promise<Object>} - The created user
+ */
+const createUser = async (userData) => {
+  try {
+    const { uid, email, displayName, photoURL } = userData;
+    
+    // Create basic user with default settings
+    const user = new User({
+      uid,
+      email,
+      displayName: displayName || email.split('@')[0],
+      photoURL: photoURL || '',
+      role: 'Starter',
+      createdAt: new Date(),
+      lastLogin: new Date()
+    });
+    
+    await user.save();
+    return user;
+  } catch (error) {
+    console.error('Error in createUser:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
@@ -292,5 +320,6 @@ module.exports = {
   updateSocialMediaTokens,
   removeSocialMediaConnection,
   removeTikTokAccount,
-  removeTwitterAccount
+  removeTwitterAccount,
+  createUser
 }; 

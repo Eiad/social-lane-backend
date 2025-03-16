@@ -3,36 +3,49 @@ const router = express.Router();
 const User = require('../models/User');
 const paypalService = require('../services/paypalService');
 
+// Add CORS headers for subscription requests
+router.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.header('origin') || process.env.FRONTEND_URL || 'https://sociallane-frontend.mindio.chat');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 // Create a subscription
 router.post('/create-subscription', async (req, res) => {
   try {
-    const { uid } = req.body;
-    console.log(`Creating subscription for user: ${uid}`);
+    const { uid, planTier = 'Launch' } = req.body;
 
     if (!uid) {
-      console.log('User ID is required but was not provided');
       return res.status(400).json({
         success: false,
         error: 'User ID is required'
       });
     }
 
-    // Find the user
-    const user = await User.findOne({ uid });
-    if (!user) {
-      console.log(`User not found with ID: ${uid}`);
-      return res.status(404).json({
+    // Validate the plan tier
+    if (!['Launch', 'Rise', 'Scale'].includes(planTier)) {
+      return res.status(400).json({
         success: false,
-        error: 'User not found'
+        error: 'Invalid plan tier. Must be Launch, Rise, or Scale'
       });
     }
 
-    // Check if user already has an active subscription
-    if (user.subscription?.status === 'ACTIVE') {
-      console.log(`User ${uid} already has an active subscription: ${user.subscription.paypalSubscriptionId}`);
-      return res.status(400).json({
+    console.log(`Creating subscription for user ${uid} with plan tier: ${planTier}`);
+
+    // Find the user
+    const user = await User.findOne({ uid });
+    if (!user) {
+      return res.status(404).json({
         success: false,
-        error: 'User already has an active subscription'
+        error: 'User not found'
       });
     }
 
@@ -45,12 +58,17 @@ router.post('/create-subscription', async (req, res) => {
         // If the subscription is still active in PayPal but not in our DB, update our DB
         if (subscriptionDetails.status === 'ACTIVE') {
           console.log(`Subscription ${user.subscription.paypalSubscriptionId} is active in PayPal but not in our DB. Updating DB.`);
+          
+          // Get the plan tier from the plan ID
+          const currentPlanTier = paypalService.getPlanTierFromId(subscriptionDetails.plan_id);
+          
           await User.findOneAndUpdate(
             { uid },
             {
-              role: 'Pro',
+              role: currentPlanTier,
               'subscription.status': 'ACTIVE',
-              'subscription.updatedAt': new Date()
+              'subscription.updatedAt': new Date(),
+              'subscription.planId': subscriptionDetails.plan_id
             }
           );
           
@@ -67,11 +85,12 @@ router.post('/create-subscription', async (req, res) => {
 
     // Create subscription with PayPal
     const subscription = await paypalService.createSubscription({
-      returnUrl: `${process.env.BACKEND_URL}/paypal/subscription-success?uid=${uid}`,
-      cancelUrl: `${process.env.FRONTEND_URL}/subscription?status=cancelled&uid=${uid}`
+      returnUrl: `${process.env.BACKEND_URL}/paypal/subscription-success?uid=${uid}&plan_tier=${planTier}`,
+      cancelUrl: `${process.env.FRONTEND_URL}/subscription?status=cancelled&uid=${uid}`,
+      planTier: planTier
     });
 
-    console.log(`Created PayPal subscription: ${subscription.id} for user: ${uid}`);
+    console.log(`Created PayPal subscription: ${subscription.id} for user: ${uid} with plan tier: ${planTier}`);
 
     // Update user with pending subscription
     await User.findOneAndUpdate(
@@ -85,13 +104,10 @@ router.post('/create-subscription', async (req, res) => {
       }
     );
 
-    console.log(`Updated user ${uid} with pending subscription: ${subscription.id}`);
-
-    // Return the approval URL to redirect the user
+    // Return the subscription approval URL
     res.status(200).json({
       success: true,
       data: {
-        subscriptionId: subscription.id,
         approvalUrl: subscription.links.find(link => link.rel === 'approve').href
       }
     });
@@ -107,8 +123,8 @@ router.post('/create-subscription', async (req, res) => {
 // Handle subscription success (redirect from PayPal)
 router.get('/subscription-success', async (req, res) => {
   try {
-    const { uid, subscription_id } = req.query;
-    console.log(`Handling subscription success for user: ${uid}, subscription: ${subscription_id}`);
+    const { uid, subscription_id, plan_tier = 'Launch' } = req.query;
+    console.log(`Handling subscription success for user: ${uid}, subscription: ${subscription_id}, plan tier: ${plan_tier}`);
     
     if (!uid || !subscription_id) {
       console.log('User ID and subscription ID are required but were not provided');
@@ -122,14 +138,19 @@ router.get('/subscription-success', async (req, res) => {
     const subscriptionDetails = await paypalService.getSubscription(subscription_id);
     console.log(`Subscription status from PayPal: ${subscriptionDetails.status}`);
     
+    // Determine the correct role based on the plan ID
+    const planTier = paypalService.getPlanTierFromId(subscriptionDetails.plan_id);
+    console.log(`Determined plan tier from PayPal plan ID: ${planTier}`);
+    
     // Update user with active subscription
     const user = await User.findOneAndUpdate(
       { uid },
       {
-        role: 'Pro',
+        role: planTier,
         subscriptionStartDate: new Date(),
         'subscription.paypalSubscriptionId': subscription_id,
         'subscription.status': subscriptionDetails.status,
+        'subscription.planId': subscriptionDetails.plan_id,
         'subscription.updatedAt': new Date(),
         'subscription.nextBillingTime': new Date(subscriptionDetails.billing_info?.next_billing_time || Date.now()),
         $push: {
@@ -152,13 +173,13 @@ router.get('/subscription-success', async (req, res) => {
       });
     }
 
-    console.log(`Updated user ${uid} with active subscription: ${subscription_id}`);
+    console.log(`Updated user ${uid} with active subscription: ${subscription_id}, role: ${planTier}`);
 
     // Redirect to frontend with success status
     res.redirect(`${process.env.FRONTEND_URL}/my-account?subscription=success&uid=${uid}`);
   } catch (error) {
     console.error('Error handling subscription success:', error);
-    res.redirect(`${process.env.FRONTEND_URL}/my-account?subscription=error&message=${encodeURIComponent(error.message)}`);
+    res.redirect(`${process.env.FRONTEND_URL}/subscription?status=error&uid=${req.query.uid}`);
   }
 });
 
@@ -190,30 +211,39 @@ router.get('/:uid/subscription', async (req, res) => {
       });
     }
 
-    // Check if subscription has expired but user still has Pro role
+    // Check if subscription has expired but user still has a paid role
     const now = new Date();
-    if (user.role === 'Pro' && 
+    if (['Launch', 'Rise', 'Scale'].includes(user.role) && 
         user.subscription.status === 'CANCELLED' && 
         user.subscriptionEndDate && 
         user.subscriptionEndDate < now) {
       
-      console.log(`User ${uid} has expired subscription (end date: ${user.subscriptionEndDate.toISOString()}) but still has Pro role. Downgrading to Free.`);
+      console.log(`User ${uid} has expired subscription (end date: ${user.subscriptionEndDate.toISOString()}) but still has ${user.role} role. Downgrading to Starter.`);
       
-      // Update user to Free role
+      // Update user to Starter role
       await User.findOneAndUpdate(
         { uid },
         {
-          role: 'Free',
+          role: 'Starter',
           'subscription.status': 'EXPIRED'
         }
       );
       
       // Reload user with updated data
       const updatedUser = await User.findOne({ uid });
-      user.role = updatedUser.role;
-      user.subscription.status = updatedUser.subscription.status;
       
-      console.log(`User ${uid} has been downgraded to Free role due to expired subscription`);
+      return res.status(200).json({
+        success: true,
+        data: {
+          hasSubscription: true,
+          subscriptionId: updatedUser.subscription.paypalSubscriptionId,
+          status: 'EXPIRED',
+          role: 'Starter',
+          planId: updatedUser.subscription.planId,
+          planTier: 'Starter',
+          subscriptionEndDate: updatedUser.subscriptionEndDate
+        }
+      });
     }
 
     // Get subscription details from PayPal if it exists
@@ -221,9 +251,13 @@ router.get('/:uid/subscription', async (req, res) => {
       console.log(`Fetching subscription details from PayPal for: ${user.subscription.paypalSubscriptionId}`);
       const subscriptionDetails = await paypalService.getSubscription(user.subscription.paypalSubscriptionId);
       
+      // Determine the plan tier based on the plan ID
+      const planTier = paypalService.getPlanTierFromId(subscriptionDetails.plan_id);
+      
       // Update subscription status if it has changed
       if (subscriptionDetails.status !== user.subscription.status) {
         console.log(`Subscription status changed from ${user.subscription.status} to ${subscriptionDetails.status}. Updating user.`);
+        
         await User.findOneAndUpdate(
           { uid },
           {
@@ -231,7 +265,7 @@ router.get('/:uid/subscription', async (req, res) => {
             'subscription.updatedAt': new Date(),
             'subscription.nextBillingTime': new Date(subscriptionDetails.billing_info?.next_billing_time || Date.now()),
             // Update role if subscription is no longer active
-            ...(subscriptionDetails.status !== 'ACTIVE' && { role: 'Free' })
+            ...(subscriptionDetails.status !== 'ACTIVE' && { role: 'Starter' })
           }
         );
       }
@@ -244,8 +278,9 @@ router.get('/:uid/subscription', async (req, res) => {
           subscriptionId: user.subscription.paypalSubscriptionId,
           status: subscriptionDetails.status,
           nextBillingTime: subscriptionDetails.billing_info?.next_billing_time,
-          role: subscriptionDetails.status === 'ACTIVE' ? 'Pro' : 'Free',
+          role: subscriptionDetails.status === 'ACTIVE' ? planTier : 'Starter',
           planId: subscriptionDetails.plan_id,
+          planTier: planTier,
           subscriptionEndDate: user.subscriptionEndDate
         }
       });
@@ -262,6 +297,7 @@ router.get('/:uid/subscription', async (req, res) => {
           nextBillingTime: user.subscription.nextBillingTime,
           role: user.role,
           planId: user.subscription.planId,
+          planTier: paypalService.getPlanTierFromId(user.subscription.planId) || user.role,
           subscriptionEndDate: user.subscriptionEndDate
         }
       });
@@ -275,82 +311,129 @@ router.get('/:uid/subscription', async (req, res) => {
   }
 });
 
-// Cancel subscription
+// Endpoint for the user to manually cancel their subscription
 router.post('/:uid/cancel-subscription', async (req, res) => {
   try {
     const { uid } = req.params;
-    const { reason } = req.body;
-    console.log(`Cancelling subscription for user: ${uid}, reason: ${reason || 'Not provided'}`);
-    
-    // Find the user
     const user = await User.findOne({ uid });
+
     if (!user) {
-      console.log(`User not found with ID: ${uid}`);
       return res.status(404).json({
         success: false,
         error: 'User not found'
       });
     }
 
-    // If user has no subscription
-    if (!user.subscription?.paypalSubscriptionId) {
-      console.log(`User ${uid} has no active subscription to cancel`);
+    const paypalSubscriptionId = user?.subscription?.paypalSubscriptionId;
+    
+    if (!paypalSubscriptionId) {
       return res.status(400).json({
         success: false,
-        error: 'User has no active subscription'
+        error: 'No active subscription found for this user'
       });
     }
 
-    // Cancel subscription with PayPal
-    const cancelResult = await paypalService.cancelSubscription(
-      user.subscription.paypalSubscriptionId, 
-      reason || 'Cancelled by user'
-    );
+    console.log(`Processing manual subscription cancellation for user ${uid} with subscription ${paypalSubscriptionId}`);
 
-    console.log(`PayPal cancellation result for ${user.subscription.paypalSubscriptionId}: ${JSON.stringify(cancelResult)}`);
+    try {
+      // Call PayPal to cancel the subscription
+      const response = await fetch(
+        `${PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}/cancel`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${await getAccessToken()}`
+          },
+          body: JSON.stringify({
+            reason: 'Cancelled by user'
+          })
+        }
+      );
 
-    // Get the subscription details to get the next billing time (which will be the end date)
-    const subscriptionDetails = await paypalService.getSubscription(user.subscription.paypalSubscriptionId);
-    const nextBillingTime = subscriptionDetails?.billing_info?.next_billing_time;
-    
-    // Ensure we have a valid end date
-    let endDate;
-    if (nextBillingTime) {
-      endDate = new Date(nextBillingTime);
-    } else {
-      // If no next billing time is available, set end date to 30 days from now as fallback
-      endDate = new Date();
-      endDate.setDate(endDate.getDate() + 30);
-      console.log(`No next billing time available, using fallback end date: ${endDate.toISOString()}`);
-    }
-    
-    console.log(`Setting subscription end date to: ${endDate.toISOString()}`);
+      // Get subscription details to determine end date
+      const subscriptionDetails = await fetch(
+        `${PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${await getAccessToken()}`
+          }
+        }
+      ).then(res => res.json());
 
-    // Update user subscription status but keep Pro role until the end of billing period
-    await User.findOneAndUpdate(
-      { uid },
-      {
-        'subscription.status': 'CANCELLED',
-        'subscription.updatedAt': new Date(),
-        'subscription.nextBillingTime': endDate,
-        // Set the subscription end date to the next billing time
-        subscriptionEndDate: endDate,
-        // Don't change the role to Free immediately - they remain Pro until the end of billing period
-        // role: 'Free'
+      let subscriptionEndDate = null;
+      
+      // Use next billing time if available
+      if (subscriptionDetails?.billing_info?.next_billing_time) {
+        subscriptionEndDate = new Date(subscriptionDetails.billing_info.next_billing_time);
+        console.log(`Using next billing time for end date: ${subscriptionEndDate}`);
+      } else if (user?.subscriptionEndDate) {
+        subscriptionEndDate = new Date(user.subscriptionEndDate);
+        console.log(`Using existing end date: ${subscriptionEndDate}`);
+      } else {
+        // Default to 30 days from now
+        subscriptionEndDate = new Date();
+        subscriptionEndDate.setDate(subscriptionEndDate.getDate() + 30);
+        console.log(`Using default end date (30 days from now): ${subscriptionEndDate}`);
       }
-    );
 
-    console.log(`Updated user ${uid} with cancelled subscription status, Pro access until ${endDate.toISOString()}`);
+      // Update user record with cancellation status
+      await User.updateOne(
+        { uid },
+        {
+          'subscription.status': 'CANCELLED',
+          'subscription.updatedAt': new Date(),
+          subscriptionEndDate
+        }
+      );
 
-    res.status(200).json({
-      success: true,
-      message: 'Subscription cancelled successfully'
-    });
+      console.log(`Updated user ${user?.email || user?.uid} subscription status to CANCELLED - will expire on ${subscriptionEndDate}`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Subscription cancelled successfully',
+        subscriptionEndDate
+      });
+    } catch (paypalError) {
+      console.error('Error cancelling subscription with PayPal:', paypalError);
+      
+      // Even if PayPal request fails, try to mark as cancelled in our DB
+      try {
+        // Set a default end date
+        const subscriptionEndDate = new Date();
+        subscriptionEndDate.setDate(subscriptionEndDate.getDate() + 30);
+        
+        await User.updateOne(
+          { uid },
+          {
+            'subscription.status': 'CANCELLED',
+            'subscription.updatedAt': new Date(),
+            subscriptionEndDate
+          }
+        );
+        
+        console.log(`Failed with PayPal but updated local subscription status to CANCELLED for user ${uid}`);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Subscription marked as cancelled in our system, but there was an issue with the payment provider',
+          subscriptionEndDate
+        });
+      } catch (dbError) {
+        console.error('Error updating user subscription status:', dbError);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to cancel subscription. Please contact support.'
+        });
+      }
+    }
   } catch (error) {
     console.error('Error cancelling subscription:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: error.message || 'Error cancelling subscription'
+      error: error?.message || 'An unexpected error occurred'
     });
   }
 });
@@ -453,19 +536,23 @@ async function handleSubscriptionActivated(resource) {
 
     console.log(`Updating user ${user.uid} with activated subscription`);
 
+    // Determine the plan tier from the plan ID
+    const planTier = paypalService.getPlanTierFromId(resource.plan_id);
+    
     // Update user subscription status
     await User.findOneAndUpdate(
       { 'subscription.paypalSubscriptionId': subscriptionId },
       {
-        role: 'Pro',
+        role: planTier,
         'subscription.status': 'ACTIVE',
+        'subscription.planId': resource.plan_id,
         'subscription.updatedAt': new Date(),
         'subscription.nextBillingTime': new Date(resource.billing_info?.next_billing_time || Date.now()),
         subscriptionStartDate: new Date()
       }
     );
     
-    console.log(`Successfully updated user ${user.uid} with activated subscription`);
+    console.log(`Successfully updated user ${user.uid} with activated subscription, role: ${planTier}`);
   } catch (error) {
     console.error('Error handling subscription activated webhook:', error);
   }
@@ -489,7 +576,7 @@ async function handleSubscriptionUpdated(resource) {
     const nextBillingTime = resource.billing_info?.next_billing_time;
     
     // For cancelled subscriptions, we need to check if they still have access
-    // If the subscription is cancelled but next_billing_time is in the future, they still have Pro access
+    // If the subscription is cancelled but next_billing_time is in the future, they still have paid access
     const isCancelledButActive = 
       resource.status === 'CANCELLED' && 
       nextBillingTime && 
@@ -510,10 +597,14 @@ async function handleSubscriptionUpdated(resource) {
       endDate = new Date(nextBillingTime);
     }
     
+    // Determine the plan tier from the plan ID
+    const planTier = paypalService.getPlanTierFromId(resource.plan_id);
+    
     // Update user subscription status
     const updateData = {
       'subscription.status': resource.status,
       'subscription.updatedAt': new Date(),
+      'subscription.planId': resource.plan_id
     };
     
     // Add next billing time if available
@@ -521,15 +612,12 @@ async function handleSubscriptionUpdated(resource) {
       updateData['subscription.nextBillingTime'] = endDate;
     }
     
-    // Only update role to Free if subscription is no longer active and not in the "cancelled but active" state
+    // Only update role to Starter if subscription is no longer active and not in the "cancelled but active" state
     if (!isCancelledButActive && resource.status !== 'ACTIVE') {
-      updateData.role = 'Free';
-    }
-    
-    // Set the subscription end date if the subscription is cancelled
-    if (resource.status === 'CANCELLED' && endDate) {
-      updateData.subscriptionEndDate = endDate;
-      console.log(`Setting subscription end date to: ${endDate.toISOString()}`);
+      updateData.role = 'Starter';
+    } else if (resource.status === 'ACTIVE') {
+      // If active, set to the appropriate plan tier
+      updateData.role = planTier;
     }
     
     await User.findOneAndUpdate(
@@ -537,65 +625,83 @@ async function handleSubscriptionUpdated(resource) {
       updateData
     );
     
-    if (isCancelledButActive) {
-      console.log(`User ${user.uid} has cancelled subscription but retains Pro access until ${endDate ? endDate.toISOString() : 'unknown'}`);
-    } else {
-      console.log(`Successfully updated user ${user.uid} with subscription status: ${resource.status}`);
-    }
+    console.log(`Successfully updated user ${user.uid} with status: ${resource.status}, role: ${updateData.role || user.role}`);
   } catch (error) {
     console.error('Error handling subscription updated webhook:', error);
   }
 }
 
-async function handleSubscriptionCancelled(resource) {
+const handleSubscriptionCancelled = async (resource) => {
   try {
-    const subscriptionId = resource.id;
-    console.log(`Processing subscription cancelled webhook for: ${subscriptionId}`);
-    
-    // Find user with this subscription ID
-    const user = await User.findOne({ 'subscription.paypalSubscriptionId': subscriptionId });
+    const subscriptionId = resource?.id;
+    if (!subscriptionId) {
+      console.error('Missing subscription ID in PayPal cancellation webhook');
+      return {
+        success: false,
+        error: 'Missing subscription ID'
+      };
+    }
+
+    console.log(`Processing subscription cancellation for ID: ${subscriptionId}`);
+
+    // Find the user with this subscription ID
+    const user = await User.findOne({
+      'subscription.paypalSubscriptionId': subscriptionId
+    });
+
     if (!user) {
-      console.error(`User not found for subscription: ${subscriptionId}`);
-      return;
+      console.error(`No user found with PayPal subscription ID: ${subscriptionId}`);
+      return {
+        success: false,
+        error: 'User not found'
+      };
     }
 
-    console.log(`Updating user ${user.uid} with cancelled subscription`);
-
-    // Get the next billing time which will be the end date of Pro access
-    const nextBillingTime = resource.billing_info?.next_billing_time;
+    // We'll keep the user on their current plan until the end of the billing period
+    // Get the next billing date from the resource details if available
+    let subscriptionEndDate = null;
     
-    // Ensure we have a valid end date
-    let endDate;
-    if (nextBillingTime) {
-      endDate = new Date(nextBillingTime);
+    // First try to get from nextBillingTime if available
+    if (resource?.billing_info?.next_billing_time) {
+      subscriptionEndDate = new Date(resource.billing_info.next_billing_time);
+      console.log(`Using next billing time for end date: ${subscriptionEndDate}`);
+    } 
+    // Fallback to user's existing end date or +30 days
+    else if (user?.subscriptionEndDate) {
+      subscriptionEndDate = new Date(user.subscriptionEndDate);
+      console.log(`Using existing end date: ${subscriptionEndDate}`);
     } else {
-      // If no next billing time is available, set end date to 30 days from now as fallback
-      endDate = new Date();
-      endDate.setDate(endDate.getDate() + 30);
-      console.log(`No next billing time available, using fallback end date: ${endDate.toISOString()}`);
+      // Default to 30 days from now
+      subscriptionEndDate = new Date();
+      subscriptionEndDate.setDate(subscriptionEndDate.getDate() + 30);
+      console.log(`Using default end date (30 days from now): ${subscriptionEndDate}`);
     }
-    
-    console.log(`Setting subscription end date to: ${endDate.toISOString()}`);
-    
-    // Update user subscription status but keep Pro role until the end of billing period
-    await User.findOneAndUpdate(
-      { 'subscription.paypalSubscriptionId': subscriptionId },
+
+    // Update the user's subscription status
+    await User.updateOne(
+      { _id: user._id },
       {
-        // Don't change role to Free immediately - they remain Pro until the end of billing period
-        // role: 'Free',
         'subscription.status': 'CANCELLED',
         'subscription.updatedAt': new Date(),
-        'subscription.nextBillingTime': endDate,
-        // Set the subscription end date to the next billing time
-        subscriptionEndDate: endDate
+        subscriptionEndDate: subscriptionEndDate
       }
     );
+
+    console.log(`Updated user ${user?.email || user?.uid} subscription status to CANCELLED - will expire on ${subscriptionEndDate}`);
     
-    console.log(`Successfully updated user ${user.uid} with cancelled subscription, Pro access until ${endDate.toISOString()}`);
+    return {
+      success: true,
+      user: user?.uid,
+      message: 'Subscription marked as CANCELLED'
+    };
   } catch (error) {
-    console.error('Error handling subscription cancelled webhook:', error);
+    console.error('Error handling subscription cancellation:', error);
+    return {
+      success: false,
+      error: error?.message || 'Error processing cancellation'
+    };
   }
-}
+};
 
 async function handleSubscriptionSuspended(resource) {
   try {
@@ -615,13 +721,13 @@ async function handleSubscriptionSuspended(resource) {
     await User.findOneAndUpdate(
       { 'subscription.paypalSubscriptionId': subscriptionId },
       {
-        role: 'Free',
+        role: 'Starter',
         'subscription.status': 'SUSPENDED',
         'subscription.updatedAt': new Date()
       }
     );
     
-    console.log(`Successfully updated user ${user.uid} with suspended subscription`);
+    console.log(`Successfully updated user ${user.uid} with suspended subscription, role changed to Starter`);
   } catch (error) {
     console.error('Error handling subscription suspended webhook:', error);
   }
@@ -704,68 +810,90 @@ async function handlePaymentCompleted(resource) {
 // Check and update expired subscriptions
 const checkExpiredSubscriptions = async () => {
   try {
-    const now = new Date();
-    console.log('Running manual subscription expiration check at', now.toISOString());
+    console.log('Manual subscription expiration check running...');
     
-    // Find users with Pro role and expired subscriptionEndDate
+    // Find users with roles Launch, Rise, or Scale whose subscription end date is past
+    // and whose subscription status is CANCELLED
     const expiredUsers = await User.find({
-      role: 'Pro',
-      subscriptionEndDate: { $lt: now },
+      role: { $in: ['Launch', 'Rise', 'Scale'] },
+      subscriptionEndDate: { $lt: new Date() },
       'subscription.status': 'CANCELLED'
     });
     
-    console.log(`Query criteria: role='Pro', subscriptionEndDate < ${now.toISOString()}, subscription.status='CANCELLED'`);
+    console.log(`Found ${expiredUsers?.length || 0} users with expired subscriptions.`);
     
-    if (expiredUsers.length > 0) {
-      console.log(`Found ${expiredUsers.length} users with expired Pro subscriptions`);
-      
-      // Log all expired users for debugging
-      expiredUsers.forEach(user => {
-        console.log(`Expired subscription: User ${user.uid} (${user.email}), Role: ${user.role}, End date: ${user.subscriptionEndDate}, Current date: ${now.toISOString()}`);
-      });
-      
-      // Downgrade each user
+    if (expiredUsers?.length > 0) {
       for (const user of expiredUsers) {
+        console.log(`Downgrading user ${user.email} from ${user.role} to Starter - subscription expired on ${user.subscriptionEndDate}`);
+        
+        // Store subscription history for reference before clearing
+        const subscriptionHistory = {
+          previousRole: user.role,
+          subscriptionId: user.subscription?.paypalSubscriptionId,
+          status: user.subscription?.status,
+          endDate: user.subscriptionEndDate,
+          expiredAt: new Date()
+        };
+        
         try {
-          console.log(`Downgrading user ${user.uid} from Pro to Free (subscription ended on ${user.subscriptionEndDate})`);
-          
+          // Add to payment history for record keeping
           await User.updateOne(
             { _id: user._id },
-            { 
-              role: 'Free',
-              $set: {
-                'subscription.status': 'EXPIRED'
+            {
+              $push: {
+                paymentHistory: {
+                  amount: 0,
+                  currency: 'USD',
+                  date: new Date(),
+                  paymentMethod: 'System',
+                  transactionId: 'subscription-expired',
+                  metadata: subscriptionHistory
+                }
               }
             }
           );
           
-          console.log(`Successfully downgraded user ${user.uid} to Free plan`);
-        } catch (error) {
-          console.error(`Error downgrading user ${user.uid}:`, error?.message);
+          // Completely reset subscription data
+          await User.updateOne(
+            { _id: user._id },
+            { 
+              role: 'Starter',
+              $unset: {
+                subscriptionStartDate: 1,
+                subscriptionEndDate: 1,
+                'subscription.paypalSubscriptionId': 1,
+                'subscription.planId': 1,
+                'subscription.nextBillingTime': 1
+              },
+              $set: {
+                'subscription.status': 'EXPIRED',
+                'subscription.updatedAt': new Date()
+              }
+            }
+          );
+          console.log(`Successfully reset subscription data for expired user ${user.email}`);
+        } catch (updateError) {
+          console.error(`Error updating user ${user.email} during expiration:`, updateError);
         }
       }
-      
-      return { success: true, count: expiredUsers.length };
     } else {
-      console.log('No users with expired Pro subscriptions found');
-      
-      // For debugging, find all Pro users with CANCELLED status
-      const allCancelledProUsers = await User.find({
-        role: 'Pro',
+      // Just for debugging
+      const cancelledSubscriptionUsers = await User.countDocuments({
         'subscription.status': 'CANCELLED'
       });
-      
-      console.log(`Found ${allCancelledProUsers.length} Pro users with CANCELLED status`);
-      
-      allCancelledProUsers.forEach(user => {
-        console.log(`Cancelled Pro user: ${user.uid} (${user.email}), End date: ${user.subscriptionEndDate}, Current date: ${now.toISOString()}, Is expired: ${user.subscriptionEndDate < now}`);
-      });
-      
-      return { success: true, count: 0 };
+      console.log(`Found ${cancelledSubscriptionUsers} users with CANCELLED subscriptions (not expired yet).`);
     }
+    
+    return {
+      success: true,
+      expiredSubscriptions: expiredUsers?.length || 0
+    };
   } catch (error) {
-    console.error('Error in manual subscription expiration checker:', error?.message);
-    return { success: false, error: error?.message };
+    console.error('Error checking expired subscriptions:', error);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 };
 
@@ -777,6 +905,149 @@ router.post('/check-expired-subscriptions', async (req, res) => {
   } catch (error) {
     console.error('Error checking expired subscriptions:', error);
     res.status(500).json({ success: false, error: error?.message });
+  }
+});
+
+// Select a subscription plan
+router.post('/select-plan', async (req, res) => {
+  try {
+    const { uid, planTier } = req.body;
+
+    if (!uid) {
+      return res.status(400).json({
+        success: false,
+        error: 'User ID is required'
+      });
+    }
+
+    if (!planTier || !['Launch', 'Rise', 'Scale'].includes(planTier)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid plan tier is required (Launch, Rise, or Scale)'
+      });
+    }
+
+    console.log(`User ${uid} selected ${planTier} plan`);
+
+    // Find the user
+    const user = await User.findOne({ uid });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Create subscription with PayPal
+    const subscription = await paypalService.createSubscription({
+      returnUrl: `${process.env.BACKEND_URL}/paypal/subscription-success?uid=${uid}&plan_tier=${planTier}`,
+      cancelUrl: `${process.env.FRONTEND_URL}/subscription?status=cancelled&uid=${uid}`,
+      planTier: planTier
+    });
+
+    console.log(`Created PayPal subscription: ${subscription.id} for user: ${uid} with plan tier: ${planTier}`);
+
+    // Update user with pending subscription
+    await User.findOneAndUpdate(
+      { uid },
+      {
+        'subscription.paypalSubscriptionId': subscription.id,
+        'subscription.status': 'APPROVAL_PENDING',
+        'subscription.planId': subscription.plan_id,
+        'subscription.createdAt': new Date(),
+        'subscription.updatedAt': new Date()
+      }
+    );
+
+    // Return the subscription approval URL
+    res.status(200).json({
+      success: true,
+      data: {
+        approvalUrl: subscription.links.find(link => link.rel === 'approve').href,
+        planTier: planTier
+      }
+    });
+  } catch (error) {
+    console.error('Error selecting plan:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error selecting plan'
+    });
+  }
+});
+
+// Add an endpoint to manually reset a user's subscription data immediately
+router.post('/:uid/reset-subscription', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    console.log(`Manual reset subscription request for user ${uid}`);
+    
+    // Find the user first
+    const user = await User.findOne({ uid });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Store subscription history for reference before clearing
+    const subscriptionHistory = {
+      previousRole: user.role,
+      subscriptionId: user.subscription?.paypalSubscriptionId,
+      status: user.subscription?.status || 'UNKNOWN',
+      endDate: user.subscriptionEndDate,
+      resetAt: new Date()
+    };
+    
+    // Add to payment history for record keeping
+    await User.updateOne(
+      { uid },
+      {
+        $push: {
+          paymentHistory: {
+            amount: 0,
+            currency: 'USD',
+            date: new Date(),
+            paymentMethod: 'Manual Reset',
+            transactionId: 'subscription-reset',
+            metadata: subscriptionHistory
+          }
+        }
+      }
+    );
+    
+    // Completely clear subscription data and reset to Starter
+    await User.updateOne(
+      { uid },
+      { 
+        role: 'Starter',
+        $unset: {
+          subscriptionStartDate: 1,
+          subscriptionEndDate: 1,
+          'subscription.paypalSubscriptionId': 1,
+          'subscription.planId': 1,
+          'subscription.nextBillingTime': 1
+        },
+        $set: {
+          'subscription.status': 'INACTIVE',
+          'subscription.updatedAt': new Date()
+        }
+      }
+    );
+    
+    console.log(`Successfully reset subscription data for user ${uid}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Subscription data has been reset'
+    });
+  } catch (error) {
+    console.error(`Error resetting subscription for user:`, error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error resetting subscription'
+    });
   }
 });
 

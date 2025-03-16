@@ -47,8 +47,8 @@ function getAuthUrl() {
       clientSecret: clientSecret ? '✓ Present' : '✗ Missing'
     });
     
-    // Generate auth link
-    const { url, codeVerifier, state } = client.generateOAuth2AuthLink(
+    // Generate auth link with force_login=true to ensure the user can select different accounts
+    const { url: baseUrl, codeVerifier, state } = client.generateOAuth2AuthLink(
       callbackUrl, 
       { 
         // Only use scopes explicitly supported by Twitter API v2
@@ -56,7 +56,11 @@ function getAuthUrl() {
       }
     );
     
-    console.log('Generated Twitter auth link successfully');
+    // Add force_login=true to the URL to force the login screen even if already logged in
+    // This allows users to switch accounts when authenticating
+    const url = `${baseUrl}&force_login=true`;
+    
+    console.log('Generated Twitter auth link successfully with force_login=true');
     console.log('Auth URL:', url);
     
     return { url, codeVerifier, state };

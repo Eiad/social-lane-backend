@@ -229,6 +229,61 @@ const removeTikTokAccount = async (uid, openId) => {
   }
 };
 
+/**
+ * Remove a specific Twitter account from user's Twitter connections
+ * @param {string} uid - User's Firebase UID
+ * @param {string} userId - Twitter user_id to remove
+ * @returns {Promise<Object>} - The updated user
+ */
+const removeTwitterAccount = async (uid, userId) => {
+  if (!uid || !userId) {
+    throw new Error('User ID and Twitter user_id are required');
+  }
+  
+  try {
+    // First get the user to check current Twitter accounts
+    const user = await User.findOne({ uid });
+    
+    if (!user) {
+      throw new Error('User not found');
+    }
+    
+    // Get current Twitter accounts
+    const twitterAccounts = user?.providerData?.get('twitter') || [];
+    
+    // If no Twitter accounts, nothing to remove
+    if (!Array.isArray(twitterAccounts) || twitterAccounts.length === 0) {
+      return user;
+    }
+    
+    console.log('Current Twitter accounts:', JSON.stringify(twitterAccounts, null, 2));
+    console.log('Removing account with userId:', userId);
+    
+    // Filter out the account to remove
+    const updatedAccounts = twitterAccounts.filter(account => account?.userId !== userId);
+    
+    console.log('Filtered accounts:', JSON.stringify(updatedAccounts, null, 2));
+    
+    // Update the user with filtered accounts
+    const updateQuery = {};
+    updateQuery['providerData.twitter'] = updatedAccounts.length > 0 ? updatedAccounts : null;
+    
+    // If there are no more accounts, unset the field, otherwise update with remaining accounts
+    const operation = updatedAccounts.length > 0 ? { $set: updateQuery } : { $unset: { 'providerData.twitter': 1 } };
+    
+    const updatedUser = await User.findOneAndUpdate(
+      { uid },
+      operation,
+      { new: true, runValidators: true }
+    );
+    
+    return updatedUser;
+  } catch (error) {
+    console.error(`Error removing Twitter account for user ${uid}:`, error);
+    throw error;
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
@@ -236,5 +291,6 @@ module.exports = {
   isUserPro,
   updateSocialMediaTokens,
   removeSocialMediaConnection,
-  removeTikTokAccount
+  removeTikTokAccount,
+  removeTwitterAccount
 }; 

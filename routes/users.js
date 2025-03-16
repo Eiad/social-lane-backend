@@ -244,10 +244,10 @@ router.post('/:uid/social/twitter', async (req, res) => {
     const { uid } = req.params;
     const tokenData = req.body;
     
-    if (!tokenData || !tokenData.accessToken) {
+    if (!tokenData || !Array.isArray(tokenData)) {
       return res.status(400).json({
         success: false,
-        error: 'Twitter token data is required'
+        error: 'Twitter token data should be an array'
       });
     }
     
@@ -259,6 +259,36 @@ router.post('/:uid/social/twitter', async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating Twitter tokens:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// Remove user's Twitter account
+router.delete('/:uid/social/twitter', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Twitter user_id is required'
+      });
+    }
+    
+    // Remove specific Twitter account from user's providerData
+    const user = await userService.removeTwitterAccount(uid, userId);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Twitter connection removed successfully',
+      data: user
+    });
+  } catch (error) {
+    console.error('Error removing Twitter connection:', error);
     res.status(500).json({
       success: false,
       error: 'Server error'

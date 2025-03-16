@@ -86,9 +86,23 @@ router.get('/callback', async (req, res) => {
       username: tokenData.username
     });
     
+    // Attempt to get user profile data
+    let profileData = {};
+    try {
+      const userInfo = await twitterService.getUserInfo(tokenData.access_token);
+      if (userInfo) {
+        profileData = {
+          name: userInfo.name,
+          profile_image_url: userInfo.profile_image_url
+        };
+      }
+    } catch (error) {
+      console.warn('Could not fetch Twitter user profile data:', error.message);
+    }
+    
     // Redirect to frontend with access token as a query parameter
     // In production, you should use a more secure method to transfer the token
-    const redirectUrl = `${process.env.FRONTEND_URL}/twitter?access_token=${encodeURIComponent(tokenData.access_token)}&refresh_token=${encodeURIComponent(tokenData.refresh_token || '')}&user_id=${encodeURIComponent(tokenData.user_id || '')}&username=${encodeURIComponent(tokenData.username || '')}`;
+    const redirectUrl = `${process.env.FRONTEND_URL}/twitter?access_token=${encodeURIComponent(tokenData.access_token)}&refresh_token=${encodeURIComponent(tokenData.refresh_token || '')}&user_id=${encodeURIComponent(tokenData.user_id || '')}&username=${encodeURIComponent(tokenData.username || '')}&name=${encodeURIComponent(profileData.name || '')}&profile_image_url=${encodeURIComponent(profileData.profile_image_url || '')}`;
     
     console.log('Redirecting to frontend with token data');
     res.redirect(redirectUrl);
@@ -104,7 +118,7 @@ router.post('/post-video', async (req, res) => {
     console.log('=== TWITTER POST VIDEO ROUTE START ===');
     console.log('Request body:', JSON.stringify(req.body || {}, null, 2));
     
-    const { videoUrl, accessToken, accessTokenSecret, text } = req?.body || {};
+    const { videoUrl, accessToken, accessTokenSecret, text, userId } = req?.body || {};
     
     if (!videoUrl || !accessToken || !accessTokenSecret) {
       console.log('Missing required parameters:', {
@@ -120,7 +134,8 @@ router.post('/post-video', async (req, res) => {
       hasAccessToken: !!accessToken,
       hasAccessTokenSecret: !!accessTokenSecret,
       accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
-      accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing'
+      accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing',
+      userId: userId || 'not provided'
     });
 
     const result = await twitterService.postMediaTweet(videoUrl, accessToken, text, accessTokenSecret);

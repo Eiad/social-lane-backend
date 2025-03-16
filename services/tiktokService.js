@@ -12,9 +12,11 @@ const TIKTOK_USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
 function getAuthUrl({ forceLogin = false, state = '' } = {}) {
   const redirectUri = `${process.env.BACKEND_URL}/tiktok/callback`;
   
-  // Include all required scopes for video posting
+  // Include all required scopes for video posting and user info
   const scopes = [
     'user.info.basic',
+    'user.info.profile',  // Add profile scope for detailed profile info
+    'user.info.stats',    // Add stats scope for follower counts etc
     'video.upload',
     'video.publish'
   ].join(',');
@@ -35,6 +37,7 @@ function getAuthUrl({ forceLogin = false, state = '' } = {}) {
   const authUrl = `${TIKTOK_AUTH_URL}?${params.toString()}`;
   
   console.log('Generated TikTok Auth URL:', authUrl);
+  console.log('Requested scopes:', scopes);
   return authUrl;
 }
 
@@ -321,12 +324,60 @@ async function getUserInfo(accessToken, refreshToken = '') {
       headers['X-Refresh-Token'] = refreshToken;
     }
     
-    const response = await axios.get(TIKTOK_USER_INFO_URL, { headers });
+    // Specify fields parameter to ensure we get the avatar_url_100 and username
+    // Start with a comprehensive set of fields
+    let fields = ['open_id', 'union_id', 'avatar_url', 'avatar_url_100', 'display_name', 'bio_description', 'profile_deep_link', 'is_verified', 'follower_count', 'following_count', 'likes_count', 'video_count', 'username'];
     
-    console.log('User info response:', response?.data);
-    return response?.data?.data?.user;
+    // First attempt with all fields
+    try {
+      console.log('Attempting to fetch user info with all fields:', fields.join(','));
+      const response = await axios.get(`${TIKTOK_USER_INFO_URL}?fields=${fields.join(',')}`, { headers });
+      
+      console.log('User info response:', response?.data);
+      
+      // Extract and log specific fields for debugging
+      const userData = response?.data?.data?.user;
+      if (userData) {
+        console.log('TikTok user data retrieved:', {
+          has_username: !!userData.username,
+          has_avatar_url: !!userData.avatar_url,
+          has_avatar_url_100: !!userData.avatar_url_100,
+          has_display_name: !!userData.display_name
+        });
+      }
+      
+      return userData;
+    } catch (error) {
+      // If first attempt fails due to scope issues, try with minimal fields
+      if (error?.response?.data?.error?.code === 'scope_not_authorized') {
+        console.log('Scope not authorized for comprehensive fields. Trying with basic fields only.');
+        // Retry with only basic fields that should be available with user.info.basic scope
+        fields = ['open_id', 'avatar_url', 'display_name', 'username'];
+        
+        const retryResponse = await axios.get(`${TIKTOK_USER_INFO_URL}?fields=${fields.join(',')}`, { headers });
+        console.log('Basic user info response:', retryResponse?.data);
+        
+        return retryResponse?.data?.data?.user;
+      } else {
+        // Re-throw original error if it's not a scope issue
+        throw error;
+      }
+    }
   } catch (error) {
     console.error('Error getting user info:', error?.response?.data || error?.message);
+    
+    // Check if the error is due to scope issues
+    if (error?.response?.data?.error?.code === 'scope_not_authorized') {
+      // Create a minimal user object with available information
+      console.log('Unable to fetch user info due to scope authorization. Creating minimal user object.');
+      return {
+        username: 'TikTok User',
+        display_name: 'TikTok User',
+        avatar_url: null,
+        avatar_url_100: null
+      };
+    }
+    
     throw new Error('Failed to get user info');
   }
 }

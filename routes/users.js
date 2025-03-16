@@ -294,4 +294,34 @@ router.post('/:uid/social/tiktok', async (req, res) => {
   }
 });
 
+// Remove user's TikTok connection
+router.delete('/:uid/social/tiktok', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { openId } = req.query;
+    
+    if (!openId) {
+      return res.status(400).json({
+        success: false,
+        error: 'TikTok open_id is required'
+      });
+    }
+    
+    // Remove specific TikTok account from user's providerData
+    const user = await userService.removeTikTokAccount(uid, openId);
+    
+    res.status(200).json({
+      success: true,
+      message: 'TikTok connection removed successfully',
+      data: user
+    });
+  } catch (error) {
+    console.error('Error removing TikTok connection:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
 module.exports = router; 

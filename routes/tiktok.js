@@ -22,7 +22,10 @@ router.get('/auth', (req, res) => {
 // TikTok OAuth callback
 router.get('/callback', async (req, res) => {
   try {
-    const { code, error, error_description, state } = req?.query || {};
+    const { code, error, error_description, state, scopes } = req?.query || {};
+    
+    // Log the scopes that were authorized by the user
+    console.log('TikTok callback received with scopes:', scopes);
     
     // Handle error from TikTok
     if (error) {
@@ -43,9 +46,57 @@ router.get('/callback', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent(tokenData?.error_description || 'Token exchange failed')}`);
     }
     
-    // Redirect to frontend with access token as a query parameter
-    const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}${tokenData.refresh_token ? `&refresh_token=${encodeURIComponent(tokenData.refresh_token)}` : ''}`;
-    res.redirect(redirectUrl);
+    // Check if user.info.basic scope was granted
+    const grantedScopes = tokenData.scope?.split(',') || [];
+    console.log('Granted scopes from token response:', grantedScopes);
+    
+    if (!grantedScopes.includes('user.info.basic')) {
+      console.warn('user.info.basic scope was not granted. User profile info may not be available.');
+    }
+    
+    // Fetch user information immediately after getting the token
+    try {
+      console.log('Attempting to fetch TikTok user info with received token');
+      const userInfo = await tiktokService.getUserInfo(tokenData.access_token, tokenData.refresh_token);
+      
+      // Add user info to the redirect URL
+      const userInfoParams = userInfo ? {
+        username: userInfo.username || '',
+        display_name: userInfo.display_name || '',
+        avatar_url: userInfo.avatar_url || '',
+        avatar_url_100: userInfo.avatar_url_100 || ''
+      } : {};
+      
+      console.log('User info retrieved successfully:', {
+        hasUsername: !!userInfo?.username,
+        hasDisplayName: !!userInfo?.display_name,
+        hasAvatarUrl: !!userInfo?.avatar_url,
+        hasAvatarUrl100: !!userInfo?.avatar_url_100
+      });
+      
+      // Redirect to frontend with access token and user info as query parameters
+      const redirectParams = new URLSearchParams({
+        access_token: tokenData.access_token,
+        open_id: tokenData.open_id,
+        ...(tokenData.refresh_token ? { refresh_token: tokenData.refresh_token } : {}),
+        ...(userInfoParams ? {
+          username: userInfoParams.username,
+          display_name: userInfoParams.display_name,
+          avatar_url: userInfoParams.avatar_url,
+          avatar_url_100: userInfoParams.avatar_url_100
+        } : {})
+      });
+      
+      const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?${redirectParams.toString()}`;
+      res.redirect(redirectUrl);
+    } catch (userInfoError) {
+      console.error('Error fetching user info after token exchange:', userInfoError);
+      console.error('Error details:', userInfoError?.response?.data || userInfoError?.message);
+      
+      // Continue with the redirect even if user info fetch fails
+      const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?access_token=${encodeURIComponent(tokenData.access_token)}&open_id=${encodeURIComponent(tokenData.open_id)}${tokenData.refresh_token ? `&refresh_token=${encodeURIComponent(tokenData.refresh_token)}` : ''}`;
+      res.redirect(redirectUrl);
+    }
   } catch (error) {
     console.error('Auth callback error:', error?.message);
     res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent('Authentication failed: ' + (error?.message || 'Unknown error'))}`);

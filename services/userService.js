@@ -110,33 +110,59 @@ const isUserPro = async (uid) => {
 /**
  * Update user's social media tokens
  * @param {string} uid - User's Firebase UID
- * @param {string} platform - Social media platform (twitter, tiktok)
- * @param {Object} tokenData - Token data to store
+ * @param {string} provider - Social media provider (e.g., 'twitter', 'tiktok')
+ * @param {Array|Object} tokenData - Token data to store
  * @returns {Promise<Object>} - The updated user
  */
-const updateSocialMediaTokens = async (uid, platform, tokenData) => {
-  if (!uid || !platform || !tokenData) {
-    throw new Error('User ID, platform, and token data are required');
+const updateSocialMediaTokens = async (uid, provider, tokenData) => {
+  if (!uid || !provider || !tokenData) {
+    throw new Error('User ID, provider, and token data are required');
   }
   
   try {
-    const updateQuery = {};
-    const updatePath = `providerData.${platform}`;
-    updateQuery[updatePath] = tokenData;
-    
-    const user = await User.findOneAndUpdate(
-      { uid },
-      { $set: updateQuery },
-      { new: true, runValidators: true }
-    );
+    // First get the user to check current tokens
+    const user = await User.findOne({ uid });
     
     if (!user) {
       throw new Error('User not found');
     }
     
+    // Initialize providerData if it doesn't exist
+    if (!user.providerData) {
+      user.providerData = new Map();
+    }
+    
+    // For TikTok, handle multiple accounts
+    if (provider === 'tiktok') {
+      if (!Array.isArray(tokenData)) {
+        throw new Error('TikTok token data must be an array');
+      }
+      
+      // Validate and clean each account's data
+      const validatedAccounts = tokenData.map(account => ({
+        accessToken: account?.accessToken || '',
+        openId: account?.openId || '',
+        refreshToken: account?.refreshToken || '',
+        username: account?.username || account?.userInfo?.username || `TikTok Account ${account?.index || 0}`,
+        displayName: account?.displayName || account?.userInfo?.display_name || '',
+        avatarUrl: account?.avatarUrl || account?.userInfo?.avatar_url || '',
+        avatarUrl100: account?.avatarUrl100 || account?.userInfo?.avatar_url_100 || '',
+        index: account?.index || 0
+      }));
+      
+      // Update the user's TikTok accounts
+      user.providerData.set(provider, validatedAccounts);
+    } else {
+      // For other providers, just store the token data as is
+      user.providerData.set(provider, tokenData);
+    }
+    
+    // Save the updated user
+    await user.save();
+    
     return user;
   } catch (error) {
-    console.error(`Error updating ${platform} tokens for user ${uid}:`, error);
+    console.error(`Error updating ${provider} tokens for user ${uid}:`, error);
     throw error;
   }
 };
@@ -207,14 +233,20 @@ const removeTikTokAccount = async (uid, openId) => {
     // Filter out the account to remove
     const updatedAccounts = tiktokAccounts.filter(account => account?.openId !== openId);
     
-    console.log('Filtered accounts:', JSON.stringify(updatedAccounts, null, 2));
+    // Reindex remaining accounts
+    const reindexedAccounts = updatedAccounts.map((account, idx) => ({
+      ...account,
+      index: idx + 1
+    }));
+    
+    console.log('Filtered and reindexed accounts:', JSON.stringify(reindexedAccounts, null, 2));
     
     // Update the user with filtered accounts
     const updateQuery = {};
-    updateQuery['providerData.tiktok'] = updatedAccounts.length > 0 ? updatedAccounts : null;
+    updateQuery['providerData.tiktok'] = reindexedAccounts.length > 0 ? reindexedAccounts : null;
     
     // If there are no more accounts, unset the field, otherwise update with remaining accounts
-    const operation = updatedAccounts.length > 0 ? { $set: updateQuery } : { $unset: { 'providerData.tiktok': 1 } };
+    const operation = reindexedAccounts.length > 0 ? { $set: updateQuery } : { $unset: { 'providerData.tiktok': 1 } };
     
     const updatedUser = await User.findOneAndUpdate(
       { uid },

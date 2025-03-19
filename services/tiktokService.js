@@ -324,60 +324,93 @@ async function getUserInfo(accessToken, refreshToken = '') {
       headers['X-Refresh-Token'] = refreshToken;
     }
     
-    // Specify fields parameter to ensure we get the avatar_url_100 and username
-    // Start with a comprehensive set of fields
-    let fields = ['open_id', 'union_id', 'avatar_url', 'avatar_url_100', 'display_name', 'bio_description', 'profile_deep_link', 'is_verified', 'follower_count', 'following_count', 'likes_count', 'video_count', 'username'];
+    // Specify fields parameter to ensure we get all required user information
+    const fields = [
+      'open_id',
+      'union_id',
+      'avatar_url',
+      'avatar_url_100',
+      'display_name',
+      'bio_description',
+      'profile_deep_link',
+      'is_verified',
+      'follower_count',
+      'following_count',
+      'likes_count',
+      'video_count',
+      'username'
+    ];
     
-    // First attempt with all fields
     try {
-      console.log('Attempting to fetch user info with all fields:', fields.join(','));
+      console.log('Attempting to fetch user info with fields:', fields.join(','));
       const response = await axios.get(`${TIKTOK_USER_INFO_URL}?fields=${fields.join(',')}`, { headers });
       
       console.log('User info response:', response?.data);
       
-      // Extract and log specific fields for debugging
+      // Extract and validate user data
       const userData = response?.data?.data?.user;
       if (userData) {
+        // Log available fields for debugging
         console.log('TikTok user data retrieved:', {
           has_username: !!userData.username,
           has_avatar_url: !!userData.avatar_url,
           has_avatar_url_100: !!userData.avatar_url_100,
           has_display_name: !!userData.display_name
         });
+        
+        // Return cleaned user data with all required fields
+        return {
+          username: userData.username || '',
+          display_name: userData.display_name || userData.username || '',
+          avatar_url: userData.avatar_url || '',
+          avatar_url_100: userData.avatar_url_100 || userData.avatar_url || '',
+          bio_description: userData.bio_description || '',
+          profile_deep_link: userData.profile_deep_link || '',
+          is_verified: userData.is_verified || false,
+          follower_count: userData.follower_count || 0,
+          following_count: userData.following_count || 0,
+          likes_count: userData.likes_count || 0,
+          video_count: userData.video_count || 0,
+          open_id: userData.open_id || '',
+          union_id: userData.union_id || ''
+        };
       }
       
-      return userData;
+      throw new Error('No user data in response');
     } catch (error) {
       // If first attempt fails due to scope issues, try with minimal fields
       if (error?.response?.data?.error?.code === 'scope_not_authorized') {
         console.log('Scope not authorized for comprehensive fields. Trying with basic fields only.');
         // Retry with only basic fields that should be available with user.info.basic scope
-        fields = ['open_id', 'avatar_url', 'display_name', 'username'];
+        const basicFields = ['open_id', 'avatar_url', 'display_name', 'username'];
         
-        const retryResponse = await axios.get(`${TIKTOK_USER_INFO_URL}?fields=${fields.join(',')}`, { headers });
+        const retryResponse = await axios.get(`${TIKTOK_USER_INFO_URL}?fields=${basicFields.join(',')}`, { headers });
         console.log('Basic user info response:', retryResponse?.data);
         
-        return retryResponse?.data?.data?.user;
-      } else {
-        // Re-throw original error if it's not a scope issue
-        throw error;
+        const basicUserData = retryResponse?.data?.data?.user;
+        if (basicUserData) {
+          return {
+            username: basicUserData.username || '',
+            display_name: basicUserData.display_name || basicUserData.username || '',
+            avatar_url: basicUserData.avatar_url || '',
+            avatar_url_100: basicUserData.avatar_url || '', // Use avatar_url as fallback
+            open_id: basicUserData.open_id || ''
+          };
+        }
       }
-    }
-  } catch (error) {
-    console.error('Error getting user info:', error?.response?.data || error?.message);
-    
-    // Check if the error is due to scope issues
-    if (error?.response?.data?.error?.code === 'scope_not_authorized') {
-      // Create a minimal user object with available information
-      console.log('Unable to fetch user info due to scope authorization. Creating minimal user object.');
+      
+      // If it's not a scope issue or retry failed, create minimal user object
+      console.log('Unable to fetch user info. Creating minimal user object.');
       return {
         username: 'TikTok User',
         display_name: 'TikTok User',
         avatar_url: null,
-        avatar_url_100: null
+        avatar_url_100: null,
+        open_id: ''
       };
     }
-    
+  } catch (error) {
+    console.error('Error getting user info:', error?.response?.data || error?.message);
     throw new Error('Failed to get user info');
   }
 }

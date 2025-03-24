@@ -167,8 +167,7 @@ app.post('/schedules', (req, res) => {
 
 // Add a route handler for social/tiktok/post that forwards to the TikTok post-video endpoint
 app.post('/social/tiktok/post', async (req, res) => {
-  // Forward this request to the tiktok/post-video endpoint
-  console.log('Forwarding request from /social/tiktok/post to /tiktok/post-video');
+  console.log('Forwarding request from /social/tiktok/post to TikTok endpoints');
   
   // Log the incoming payload structure
   console.log('Incoming payload structure:', {
@@ -179,68 +178,39 @@ app.post('/social/tiktok/post', async (req, res) => {
     accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0
   });
   
-  // Handle multiple accounts case
+  // Handle multiple accounts case with our new endpoint
   if (req.body?.accounts && Array.isArray(req.body.accounts) && req.body.accounts.length > 0) {
-    const accounts = req.body.accounts;
-    const videoUrl = req.body.videoUrl || '';
-    const caption = req.body.caption || '';
-    const results = [];
+    console.log(`Using TikTok multi-account endpoint for ${req.body.accounts.length} accounts`);
     
-    // Process each account in sequence
-    for (let i = 0; i < accounts.length; i++) {
-      const account = accounts[i];
-      
-      try {
-        console.log(`Processing TikTok account ${i+1}/${accounts.length}: ${account.displayName || account.openId}`);
-        
-        // Create a new request for this account
-        const accountRequest = {
-          method: 'POST',
-          url: `${process.env.BACKEND_URL}/tiktok/post-video`,
-          data: {
-            videoUrl: videoUrl,
-            accessToken: account.accessToken || '',
-            refreshToken: account.refreshToken || '',
-            caption: caption
-          },
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        };
-        
-        // Send request to the tiktok/post-video endpoint
-        const response = await axios(accountRequest);
-        
-        results.push({
-          accountId: account.openId,
-          displayName: account.displayName,
-          success: true,
-          data: response.data
-        });
-        
-        // Add a small delay between account requests to avoid rate limiting
-        if (i < accounts.length - 1) {
-          console.log(`Waiting 3 seconds before processing next TikTok account...`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
+    try {
+      // Forward to the multi-account endpoint
+      const response = await axios({
+        method: 'POST',
+        url: `${process.env.BACKEND_URL}/tiktok/post-video-multi`,
+        data: {
+          videoUrl: req.body.videoUrl || '',
+          caption: req.body.caption || '',
+          accounts: req.body.accounts
+        },
+        headers: {
+          'Content-Type': 'application/json'
         }
-      } catch (error) {
-        console.error(`Error posting to TikTok account ${account.displayName || account.openId}:`, error?.message);
-        
-        results.push({
-          accountId: account.openId,
-          displayName: account.displayName,
-          success: false,
-          error: error?.message || 'Unknown error'
-        });
-      }
+      });
+      
+      // Return the response from the multi-account endpoint
+      return res.status(response.status).json(response.data);
+    } catch (error) {
+      console.error('Error forwarding to TikTok multi-account endpoint:', error?.message);
+      
+      // Return appropriate error response
+      const status = error.response?.status || 500;
+      const errorMessage = error.response?.data?.error || error.message || 'Unknown error';
+      
+      return res.status(status).json({ 
+        error: 'Error posting video to TikTok', 
+        details: errorMessage 
+      });
     }
-    
-    // Return the combined results
-    return res.status(200).json({
-      success: results.some(r => r.success), // Overall success if at least one account succeeded
-      message: `Posted to ${results.filter(r => r.success).length}/${accounts.length} TikTok accounts`,
-      results: results
-    });
   } 
   // Handle single account cases (legacy format or direct access token)
   else {
@@ -289,8 +259,82 @@ app.post('/social/tiktok/post', async (req, res) => {
       // Keep original body, the endpoint will return appropriate error
     }
     
+    // Forward to the single account endpoint
     req.url = '/post-video';
     tiktokRoutes(req, res);
+  }
+});
+
+// Add a route handler for social/twitter/post that forwards to the Twitter post-video endpoint
+app.post('/social/twitter/post', async (req, res) => {
+  console.log('Forwarding request from /social/twitter/post to Twitter endpoints');
+  
+  // Log the incoming payload structure
+  console.log('Incoming payload structure:', {
+    keys: req.body ? Object.keys(req.body) : [],
+    hasVideoUrl: !!req.body?.videoUrl,
+    hasAccounts: Array.isArray(req.body?.accounts) && req.body?.accounts.length > 0,
+    hasText: !!req.body?.text,
+    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0
+  });
+  
+  // Handle multiple accounts case with our new endpoint
+  if (req.body?.accounts && Array.isArray(req.body.accounts) && req.body.accounts.length > 0) {
+    console.log(`Using Twitter multi-account endpoint for ${req.body.accounts.length} accounts`);
+    
+    try {
+      // Forward to the multi-account endpoint
+      const response = await axios({
+        method: 'POST',
+        url: `${process.env.BACKEND_URL}/twitter/post-video-multi`,
+        data: {
+          videoUrl: req.body.videoUrl || '',
+          text: req.body.text || req.body.caption || '',
+          accounts: req.body.accounts
+        },
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Return the response from the multi-account endpoint
+      return res.status(response.status).json(response.data);
+    } catch (error) {
+      console.error('Error forwarding to Twitter multi-account endpoint:', error?.message);
+      
+      // Return appropriate error response
+      const status = error.response?.status || 500;
+      const errorMessage = error.response?.data?.error || error.message || 'Unknown error';
+      
+      return res.status(status).json({ 
+        error: 'Error posting video to Twitter', 
+        details: errorMessage 
+      });
+    }
+  } 
+  // Handle single account case
+  else if (req.body?.accessToken && req.body?.accessTokenSecret) {
+    console.log('Using Twitter single account endpoint');
+    
+    const singleAccountPayload = {
+      videoUrl: req.body.videoUrl || '',
+      text: req.body.text || req.body.caption || '',
+      accessToken: req.body.accessToken,
+      accessTokenSecret: req.body.accessTokenSecret
+    };
+    
+    // Forward to the single account endpoint
+    req.body = singleAccountPayload;
+    req.url = '/post-video';
+    twitterRoutes(req, res);
+  }
+  // Handle missing parameters
+  else {
+    console.error('Missing required parameters for Twitter posting');
+    return res.status(400).json({ 
+      error: 'Missing required parameters',
+      details: 'Either accounts array or accessToken with accessTokenSecret must be provided'
+    });
   }
 });
 

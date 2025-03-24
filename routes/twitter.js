@@ -217,6 +217,87 @@ router.post('/post-video', async (req, res) => {
   }
 });
 
+// POST /twitter/post-video-multi
+router.post('/post-video-multi', async (req, res) => {
+  try {
+    const { videoUrl, accounts, text } = req?.body || {};
+    
+    if (!videoUrl || !accounts || !Array.isArray(accounts) || accounts.length === 0) {
+      console.log('Missing required parameters for multi-account posting:', {
+        hasVideoUrl: !!videoUrl,
+        hasAccounts: !!accounts,
+        isAccountsArray: Array.isArray(accounts),
+        accountsLength: Array.isArray(accounts) ? accounts.length : 0
+      });
+      return res.status(400).json({ error: 'Video URL and at least one account are required' });
+    }
+
+    console.log('=== TWITTER POST VIDEO MULTI ROUTE START ===');
+    console.log(`Posting video to ${accounts.length} Twitter accounts with URL:`, videoUrl);
+
+    const results = [];
+    
+    // Process each account in sequence
+    for (let i = 0; i < accounts.length; i++) {
+      const account = accounts[i];
+      
+      try {
+        console.log(`Processing Twitter account ${i+1}/${accounts.length}: ${account.username || account.userId}`);
+        
+        // Post to Twitter with this account - use postMediaTweet instead of postVideo
+        const result = await twitterService.postMediaTweet(
+          videoUrl, 
+          account.accessToken,
+          text || '',
+          account.accessTokenSecret
+        );
+        
+        results.push({
+          accountId: account.userId,
+          username: account.username || '',
+          success: true,
+          data: result
+        });
+        
+        // Add a small delay between account requests to avoid rate limiting
+        if (i < accounts.length - 1) {
+          console.log(`Waiting 3 seconds before processing next Twitter account...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      } catch (error) {
+        console.error(`Error posting to Twitter account ${account.username || account.userId}:`, error?.message);
+        
+        results.push({
+          accountId: account.userId,
+          username: account.username || '',
+          success: false,
+          error: error?.message || 'Unknown error'
+        });
+      }
+    }
+    
+    console.log('Twitter multi post results:', JSON.stringify(results || {}, null, 2));
+    console.log('=== TWITTER POST VIDEO MULTI ROUTE END ===');
+    
+    // Return the combined results
+    res.status(200).json({
+      success: results.some(r => r.success), // Overall success if at least one account succeeded
+      message: `Posted to ${results.filter(r => r.success).length}/${accounts.length} Twitter accounts`,
+      results: results
+    });
+  } catch (error) {
+    console.error('=== TWITTER POST VIDEO MULTI ROUTE ERROR ===');
+    console.error('Error posting video to multiple accounts:', error?.message);
+    console.error('Error stack:', error?.stack);
+    
+    // Send a properly formatted JSON response
+    res.status(500).json({ 
+      error: 'Failed to post video to Twitter: ' + (error?.message || 'Unknown error'),
+      errorCode: error?.code || 'UNKNOWN_ERROR'
+    });
+  }
+});
+
 // GET /twitter/user-info
 router.get('/user-info', async (req, res) => {
   try {

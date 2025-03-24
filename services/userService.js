@@ -124,12 +124,31 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
     const user = await User.findOne({ uid });
     
     if (!user) {
-      throw new Error('User not found');
+      console.error(`[USER SERVICE] User not found with UID: ${uid}`);
+      // Create a basic user record if one doesn't exist
+      const newUser = new User({
+        uid,
+        email: `user-${uid.substring(0, 8)}@example.com`, // Placeholder email
+        displayName: `User ${uid.substring(0, 8)}`, // Placeholder name
+        createdAt: new Date(),
+        lastLogin: new Date(),
+        providerData: {}
+      });
+      
+      try {
+        await newUser.save();
+        console.log(`[USER SERVICE] Created new user record for ${uid}`);
+        // Continue with the new user
+        user = newUser;
+      } catch (createError) {
+        console.error(`[USER SERVICE] Error creating new user:`, createError);
+        throw new Error('Failed to create user record: ' + createError.message);
+      }
     }
     
     // Initialize providerData if it doesn't exist
     if (!user.providerData) {
-      user.providerData = new Map();
+      user.providerData = {};
     }
     
     // For TikTok, handle multiple accounts
@@ -151,18 +170,135 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
       }));
       
       // Update the user's TikTok accounts
-      user.providerData.set(provider, validatedAccounts);
+      user.providerData.tiktok = validatedAccounts;
+    } 
+    // For Twitter, handle multiple accounts
+    else if (provider === 'twitter') {
+      if (!Array.isArray(tokenData)) {
+        console.warn(`[USER SERVICE] Twitter token data is not an array, converting to array`);
+        tokenData = [tokenData];
+      }
+      
+      console.log(`[USER SERVICE] Processing ${tokenData.length} Twitter accounts for user ${uid}`);
+      
+      // Initialize Twitter array if it doesn't exist
+      if (!user.providerData.twitter) {
+        user.providerData.twitter = [];
+      }
+      
+      // Process each Twitter account
+      for (const account of tokenData) {
+        // Validate required fields
+        if (!account?.accessToken || !account?.accessTokenSecret || !account?.userId) {
+          console.log('[USER SERVICE] Skipping invalid Twitter account (missing required fields):', 
+            JSON.stringify({
+              hasAccessToken: !!account?.accessToken,
+              hasAccessTokenSecret: !!account?.accessTokenSecret,
+              hasUserId: !!account?.userId
+            })
+          );
+          continue; // Skip invalid accounts
+        }
+        
+        // Check if account already exists (by userId)
+        const existingIndex = user.providerData.twitter.findIndex(
+          acc => acc?.userId === account?.userId
+        );
+        
+        const twitterAccount = {
+          accessToken: account?.accessToken,
+          accessTokenSecret: account?.accessTokenSecret,
+          userId: account?.userId,
+          username: account?.username || '',
+          name: account?.name || account?.username || '',
+          profileImageUrl: account?.profileImageUrl || ''
+        };
+        
+        console.log(`[USER SERVICE] Processing Twitter account: ${account?.username || account?.userId || 'new account'}`);
+        
+        if (existingIndex >= 0) {
+          // Update existing account
+          console.log(`[USER SERVICE] Updating existing Twitter account for ${account?.username || account?.userId}`);
+          user.providerData.twitter[existingIndex] = {
+            ...user.providerData.twitter[existingIndex],
+            ...twitterAccount
+          };
+        } else {
+          // Add new account
+          console.log(`[USER SERVICE] Adding new Twitter account for ${account?.username || account?.userId || 'unknown user'}`);
+          user.providerData.twitter.push(twitterAccount);
+        }
+      }
+      
+      // Try multiple methods to save Twitter accounts
+      
+      // 1. First try direct MongoDB update for reliability
+      try {
+        console.log(`[USER SERVICE] Performing direct MongoDB update for user ${user._id}`);
+        const mongoose = require('mongoose');
+        const db = mongoose.connection.db;
+        const usersCollection = db.collection('users');
+        
+        const updateResult = await usersCollection.updateOne(
+          { _id: user._id },
+          { $set: { 'providerData.twitter': user.providerData.twitter, lastLogin: new Date() } }
+        );
+        
+        console.log('[USER SERVICE] Direct update result:', {
+          acknowledged: updateResult.acknowledged,
+          modifiedCount: updateResult.modifiedCount,
+          matchedCount: updateResult.matchedCount
+        });
+        
+        if (updateResult.acknowledged && updateResult.modifiedCount > 0) {
+          console.log('[USER SERVICE] Direct MongoDB update successful');
+          
+          // Get the updated user with a fresh query to verify
+          const updatedUser = await User.findById(user._id);
+          return updatedUser;
+        }
+      } catch (directUpdateError) {
+        console.error('[USER SERVICE] Error with direct MongoDB update:', directUpdateError);
+        // Continue to save() method
+      }
     } else {
       // For other providers, just store the token data as is
-      user.providerData.set(provider, tokenData);
+      user.providerData[provider] = tokenData;
     }
     
-    // Save the updated user
-    await user.save();
-    
-    return user;
+    // Save the updated user with standard Mongoose method
+    try {
+      console.log(`[USER SERVICE] Saving user with standard Mongoose method`);
+      await user.save();
+      console.log(`[USER SERVICE] User saved successfully with social media tokens`);
+      
+      // Return the updated user
+      return user;
+    } catch (saveError) {
+      console.error(`[USER SERVICE] Error saving user:`, saveError);
+      
+      // If save fails, try findOneAndUpdate as a fallback
+      try {
+        console.log(`[USER SERVICE] Trying findOneAndUpdate as fallback after save failure`);
+        const updatedUser = await User.findOneAndUpdate(
+          { _id: user._id },
+          { $set: { [`providerData.${provider}`]: user.providerData[provider] } },
+          { new: true }
+        );
+        
+        if (updatedUser) {
+          console.log(`[USER SERVICE] Fallback update successful`);
+          return updatedUser;
+        } else {
+          throw new Error('Fallback update returned no document');
+        }
+      } catch (fallbackError) {
+        console.error(`[USER SERVICE] Fallback update also failed:`, fallbackError);
+        throw saveError; // Throw original error
+      }
+    }
   } catch (error) {
-    console.error(`Error updating ${provider} tokens for user ${uid}:`, error);
+    console.error(`[USER SERVICE] Error updating ${provider} tokens for user ${uid}:`, error);
     throw error;
   }
 };
@@ -273,45 +409,57 @@ const removeTwitterAccount = async (uid, userId) => {
   }
   
   try {
-    // First get the user to check current Twitter accounts
+    console.log(`[removeTwitterAccount] Starting removal of Twitter account ${userId} for user ${uid}`);
+    
+    // First get the user
     const user = await User.findOne({ uid });
     
     if (!user) {
+      console.error(`[removeTwitterAccount] User not found with uid: ${uid}`);
       throw new Error('User not found');
     }
     
-    // Get current Twitter accounts
-    const twitterAccounts = user?.providerData?.get('twitter') || [];
+    console.log(`[removeTwitterAccount] Found user: ${user._id}`);
     
-    // If no Twitter accounts, nothing to remove
-    if (!Array.isArray(twitterAccounts) || twitterAccounts.length === 0) {
+    // Check if user has Twitter accounts
+    if (!user.providerData || !user.providerData.twitter || !Array.isArray(user.providerData.twitter)) {
+      console.log(`[removeTwitterAccount] User has no Twitter accounts`);
       return user;
     }
     
-    console.log('Current Twitter accounts:', JSON.stringify(twitterAccounts, null, 2));
-    console.log('Removing account with userId:', userId);
+    // Log current Twitter accounts
+    console.log(`[removeTwitterAccount] User has ${user.providerData.twitter.length} Twitter accounts before removal`);
+    console.log(`[removeTwitterAccount] Looking for Twitter account with userId: ${userId}`);
     
-    // Filter out the account to remove
-    const updatedAccounts = twitterAccounts.filter(account => account?.userId !== userId);
+    // Find the account to remove
+    const accountIndex = user.providerData.twitter.findIndex(acc => acc.userId === userId);
     
-    console.log('Filtered accounts:', JSON.stringify(updatedAccounts, null, 2));
+    if (accountIndex === -1) {
+      console.log(`[removeTwitterAccount] Twitter account ${userId} not found in user's accounts`);
+      return user;
+    }
     
-    // Update the user with filtered accounts
-    const updateQuery = {};
-    updateQuery['providerData.twitter'] = updatedAccounts.length > 0 ? updatedAccounts : null;
+    console.log(`[removeTwitterAccount] Found Twitter account at index ${accountIndex}`);
     
-    // If there are no more accounts, unset the field, otherwise update with remaining accounts
-    const operation = updatedAccounts.length > 0 ? { $set: updateQuery } : { $unset: { 'providerData.twitter': 1 } };
+    // Remove the account directly using splice
+    const removedAccount = user.providerData.twitter.splice(accountIndex, 1)[0];
+    console.log(`[removeTwitterAccount] Removed account:`, removedAccount);
     
-    const updatedUser = await User.findOneAndUpdate(
-      { uid },
-      operation,
-      { new: true, runValidators: true }
-    );
+    // If no Twitter accounts left, remove the Twitter array completely
+    if (user.providerData.twitter.length === 0) {
+      console.log(`[removeTwitterAccount] No Twitter accounts left, removing Twitter array`);
+      delete user.providerData.twitter;
+    } else {
+      console.log(`[removeTwitterAccount] ${user.providerData.twitter.length} Twitter accounts remaining`);
+    }
     
-    return updatedUser;
+    // Save the updated user
+    await user.save();
+    console.log(`[removeTwitterAccount] User saved successfully`);
+    
+    return user;
   } catch (error) {
-    console.error(`Error removing Twitter account for user ${uid}:`, error);
+    console.error(`[removeTwitterAccount] Error removing Twitter account for user ${uid}:`, error);
     throw error;
   }
 };

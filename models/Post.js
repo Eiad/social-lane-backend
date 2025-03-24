@@ -15,6 +15,25 @@ const TikTokAccountSchema = new mongoose.Schema({
   }
 }, { _id: false }); // _id: false prevents MongoDB from adding an _id field to subdocuments
 
+// Define the Twitter account schema
+const TwitterAccountSchema = new mongoose.Schema({
+  accessToken: {
+    type: String,
+    required: true
+  },
+  accessTokenSecret: {
+    type: String,
+    required: true
+  },
+  userId: {
+    type: String,
+    required: true
+  },
+  username: {
+    type: String
+  }
+}, { _id: false });
+
 const PostSchema = new mongoose.Schema({
   video_url: {
     type: String,
@@ -64,14 +83,17 @@ const PostSchema = new mongoose.Schema({
     type: [TikTokAccountSchema],
     default: undefined
   },
+  // Legacy Twitter fields (maintained for backward compatibility)
   twitter_access_token: {
     type: String
   },
   twitter_access_token_secret: {
     type: String
   },
-  twitter_refresh_token: {
-    type: String
+  // New field for multiple Twitter accounts
+  twitter_accounts: {
+    type: [TwitterAccountSchema],
+    default: undefined
   }
 }, {
   timestamps: true

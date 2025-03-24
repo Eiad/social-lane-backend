@@ -1,33 +1,34 @@
 const express = require('express');
 const router = express.Router();
 const twitterService = require('../services/twitterService');
+const { TwitterApi } = require('twitter-api-v2');
 
-// Store code verifiers temporarily (in a real app, use a database or session)
-const codeVerifiers = new Map();
+// Store request tokens temporarily (in a real app, use a database or session)
+const requestTokens = new Map();
 
 // Get Twitter auth URL
-router.get('/auth', (req, res) => {
+router.get('/auth', async (req, res) => {
   try {
-    const authData = twitterService.getAuthUrl();
+    const authResult = await twitterService.getAuthUrl();
     
-    if (!authData?.url || !authData?.codeVerifier || !authData?.state) {
-      console.error('Invalid auth data returned:', authData);
+    if (!authResult?.oauth_token) {
+      console.error('Invalid auth data returned:', authResult);
       return res.status(500).json({ error: 'Failed to generate auth URL: Invalid auth data' });
     }
     
-    const { url, codeVerifier, state } = authData;
+    const { oauth_token, oauth_token_secret, url } = authResult;
     
     console.log('Generated Twitter Auth URL:', url);
     
-    // Store the code verifier for this state
-    codeVerifiers.set(state, codeVerifier);
+    // Store the oauth token secret for this oauth token
+    requestTokens.set(oauth_token, oauth_token_secret);
     
-    // Set a timeout to clean up the code verifier after 10 minutes
+    // Set a timeout to clean up the request token after 10 minutes
     setTimeout(() => {
-      codeVerifiers.delete(state);
+      requestTokens.delete(oauth_token);
     }, 10 * 60 * 1000);
     
-    res.json({ authUrl: url, state });
+    res.json({ authUrl: url, oauth_token });
   } catch (error) {
     console.error('Auth URL error:', error?.message);
     res.status(500).json({ error: 'Failed to generate auth URL: ' + (error?.message || 'Unknown error') });
@@ -37,75 +38,131 @@ router.get('/auth', (req, res) => {
 // Twitter OAuth callback
 router.get('/callback', async (req, res) => {
   try {
-    const { code, state, error, error_description } = req?.query || {};
+    const { oauth_token, oauth_verifier, denied } = req?.query || {};
     
     console.log('Twitter callback received:', { 
-      hasCode: !!code,
-      hasState: !!state,
-      error: error || 'none',
-      error_description: error_description || 'none' 
+      hasOauthToken: !!oauth_token,
+      hasOauthVerifier: !!oauth_verifier,
+      denied: denied || 'none',
+      tokenLength: oauth_token?.length,
+      verifierLength: oauth_verifier?.length,
+      query: JSON.stringify(req.query)
     });
     
-    // Handle error from Twitter
-    if (error) {
-      console.error('Twitter auth error:', error, error_description);
-      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent(error_description || 'Authentication failed')}`);
+    // Handle user denying the app
+    if (denied) {
+      console.error('Twitter auth denied by user:', denied);
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Authentication was denied')}`);
     }
     
-    if (!code) {
-      console.error('No authorization code provided');
-      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('No authorization code provided')}`);
+    if (!oauth_token || !oauth_verifier) {
+      console.error('Missing required OAuth parameters');
+      console.error('Query parameters:', req.query);
+      console.error('URL:', req.originalUrl);
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Missing required authentication parameters')}`);
     }
     
-    if (!state || !codeVerifiers.has(state)) {
-      console.error('Invalid or expired state parameter:', state);
-      console.error('Available states:', Array.from(codeVerifiers.keys()));
+    // Check if the token exists in our storage
+    if (!requestTokens.has(oauth_token)) {
+      console.error('Invalid or expired OAuth token:', oauth_token);
+      console.error('Available tokens:', Array.from(requestTokens.keys()));
+      
+      // Count how many tokens we have stored
+      console.log('Number of tokens in storage:', requestTokens.size);
+      
       return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Invalid or expired authorization session. Please try again.')}`);
     }
     
-    // Get the code verifier for this state
-    const codeVerifier = codeVerifiers.get(state);
+    console.log('Processing callback with OAuth token:', oauth_token);
+    console.log('OAuth token found in storage');
     
-    // Clean up the code verifier
-    codeVerifiers.delete(state);
-    
-    console.log('Processing callback with code:', code);
-    const tokenData = await twitterService.getAccessToken(code, codeVerifier);
-    
-    if (!tokenData?.access_token) {
-      console.error('Token exchange failed:', tokenData?.error || 'Unknown error');
-      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Failed to obtain access token. Please try again.')}`);
+    const tokenSecret = requestTokens.get(oauth_token);
+    if (!tokenSecret) {
+      console.error('Request token missing');
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Request token missing')}`);
     }
     
-    console.log('Token exchange successful, received tokens:', {
-      hasAccessToken: !!tokenData.access_token,
-      hasRefreshToken: !!tokenData.refresh_token,
-      accessTokenPrefix: tokenData.access_token ? tokenData.access_token.substring(0, 5) + '...' : 'missing',
-      refreshTokenPrefix: tokenData.refresh_token ? tokenData.refresh_token.substring(0, 5) + '...' : 'missing',
-      userId: tokenData.user_id,
-      username: tokenData.username
-    });
-    
-    // Attempt to get user profile data
-    let profileData = {};
     try {
-      const userInfo = await twitterService.getUserInfo(tokenData.access_token);
-      if (userInfo) {
+      const tokenData = await twitterService.getAccessToken(oauth_token, oauth_verifier, tokenSecret);
+      
+      if (!tokenData?.access_token || !tokenData?.access_token_secret) {
+        console.error('Token exchange failed:', tokenData?.error || 'Unknown error');
+        return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Failed to obtain access tokens. Please try again.')}`);
+      }
+      
+      console.log('Token exchange successful, received tokens:', {
+        hasAccessToken: !!tokenData.access_token,
+        hasAccessTokenSecret: !!tokenData.access_token_secret,
+        accessTokenPrefix: tokenData.access_token ? tokenData.access_token.substring(0, 5) + '...' : 'missing',
+        accessTokenSecretPrefix: tokenData.access_token_secret ? tokenData.access_token_secret.substring(0, 5) + '...' : 'missing',
+        userId: tokenData.user_id,
+        username: tokenData.username
+      });
+      
+      // Clean up the request token
+      requestTokens.delete(oauth_token);
+      
+      // Attempt to get user profile data
+      let profileData = {};
+      try {
+        console.log('Fetching additional user profile data...');
+        const userInfo = await twitterService.getUserInfo(tokenData.access_token, tokenData.access_token_secret);
+        
+        console.log('User profile data fetched:', {
+          hasName: !!userInfo?.name,
+          hasProfileImage: !!userInfo?.profile_image_url,
+          name: userInfo?.name || 'Not available',
+          profileImage: userInfo?.profile_image_url ? userInfo.profile_image_url.substring(0, 30) + '...' : 'Not available'
+        });
+        
+        if (userInfo) {
+          profileData = {
+            name: userInfo.name || tokenData.username, // Use username as fallback if name not available
+            profile_image_url: userInfo.profile_image_url || ''
+          };
+        }
+      } catch (profileError) {
+        console.warn('Could not fetch Twitter user profile data:', profileError.message);
+        // Use username as fallback for name if profile fetch fails
         profileData = {
-          name: userInfo.name,
-          profile_image_url: userInfo.profile_image_url
+          name: tokenData.username || '',
+          profile_image_url: ''
         };
       }
-    } catch (error) {
-      console.warn('Could not fetch Twitter user profile data:', error.message);
+      
+      console.log('Final user data being sent to frontend:', {
+        userId: tokenData.user_id,
+        username: tokenData.username,
+        name: profileData.name,
+        hasProfileImage: !!profileData.profile_image_url
+      });
+      
+      // Redirect to frontend with access token as a query parameter
+      // In production, you should use a more secure method to transfer the token
+      const redirectUrl = `${process.env.FRONTEND_URL}/twitter?access_token=${encodeURIComponent(tokenData.access_token)}&access_token_secret=${encodeURIComponent(tokenData.access_token_secret || '')}&user_id=${encodeURIComponent(tokenData.user_id || '')}&username=${encodeURIComponent(tokenData.username || '')}&name=${encodeURIComponent(profileData.name || '')}&profile_image_url=${encodeURIComponent(profileData.profile_image_url || '')}`;
+      
+      console.log('Redirecting to frontend with token data');
+      res.redirect(redirectUrl);
+    } catch (exchangeError) {
+      console.error('Token exchange error:', exchangeError?.message);
+      
+      // Clean up the request token on error
+      requestTokens.delete(oauth_token);
+      
+      if (exchangeError?.message?.includes('401') || exchangeError?.message?.includes('authentication failed')) {
+        console.error('Twitter API credentials may be invalid or expired');
+        
+        // Check if environment variables are set
+        console.log('Environment variable check:', {
+          hasApiKey: !!process.env.TWITTER_API_KEY,
+          hasApiSecret: !!process.env.TWITTER_API_SECRET
+        });
+        
+        return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Twitter authentication failed. The application\'s API access may have changed. Please try again later.')}`);
+      }
+      
+      return res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Authentication failed: ' + (exchangeError?.message || 'Unknown error'))}`);
     }
-    
-    // Redirect to frontend with access token as a query parameter
-    // In production, you should use a more secure method to transfer the token
-    const redirectUrl = `${process.env.FRONTEND_URL}/twitter?access_token=${encodeURIComponent(tokenData.access_token)}&refresh_token=${encodeURIComponent(tokenData.refresh_token || '')}&user_id=${encodeURIComponent(tokenData.user_id || '')}&username=${encodeURIComponent(tokenData.username || '')}&name=${encodeURIComponent(profileData.name || '')}&profile_image_url=${encodeURIComponent(profileData.profile_image_url || '')}`;
-    
-    console.log('Redirecting to frontend with token data');
-    res.redirect(redirectUrl);
   } catch (error) {
     console.error('Auth callback error:', error?.message);
     res.redirect(`${process.env.FRONTEND_URL}/twitter?error=${encodeURIComponent('Authentication failed: ' + (error?.message || 'Unknown error'))}`);
@@ -120,13 +177,12 @@ router.post('/post-video', async (req, res) => {
     
     const { videoUrl, accessToken, accessTokenSecret, text, userId } = req?.body || {};
     
-    if (!videoUrl || !accessToken || !accessTokenSecret) {
+    if (!videoUrl || !accessToken) {
       console.log('Missing required parameters:', {
         hasVideoUrl: !!videoUrl,
-        hasAccessToken: !!accessToken,
-        hasAccessTokenSecret: !!accessTokenSecret
+        hasAccessToken: !!accessToken
       });
-      return res.status(400).json({ error: 'Video URL, access token, and access token secret are required' });
+      return res.status(400).json({ error: 'Video URL and access token are required' });
     }
 
     console.log('Posting video to Twitter with URL:', videoUrl);
@@ -164,86 +220,39 @@ router.post('/post-video', async (req, res) => {
 // GET /twitter/user-info
 router.get('/user-info', async (req, res) => {
   try {
-    const accessToken = req.headers?.authorization?.split('Bearer ')?.[1];
+    const { accessToken, accessTokenSecret } = req.query;
     
-    if (!accessToken) {
-      return res.status(401).json({ error: 'No access token provided' });
+    if (!accessToken || !accessTokenSecret) {
+      return res.status(400).json({ error: 'Access token and access token secret are required' });
     }
     
-    const userInfo = await twitterService.getUserInfo(accessToken);
+    console.log('Fetching Twitter user info with tokens');
+    
+    const userInfo = await twitterService.getUserInfo(accessToken, accessTokenSecret);
     
     if (!userInfo) {
-      return res.status(500).json({ error: 'Failed to get user info: No user data returned' });
+      return res.status(404).json({ error: 'Failed to fetch user info' });
     }
     
-    res.json({ data: userInfo });
-  } catch (error) {
-    console.error('Error getting user info:', error?.message);
-    res.status(500).json({ error: 'Failed to get user info: ' + (error?.message || 'Unknown error') });
-  }
-});
-
-// POST /twitter/refresh-token
-router.post('/refresh-token', async (req, res) => {
-  try {
-    const { refreshToken } = req?.body || {};
+    console.log('Retrieved Twitter user info:', {
+      hasId: !!userInfo.id_str,
+      username: userInfo.screen_name,
+      name: userInfo.name,
+      hasProfileImage: !!userInfo.profile_image_url
+    });
     
-    if (!refreshToken) {
-      return res.status(400).json({ error: 'Refresh token is required' });
-    }
-    
-    const tokenData = await twitterService.refreshAccessToken(refreshToken);
-    
-    if (!tokenData?.access_token) {
-      return res.status(500).json({ error: 'Failed to refresh token: No token data returned' });
-    }
-    
-    res.json({ data: tokenData });
-  } catch (error) {
-    console.error('Error refreshing token:', error?.message);
-    res.status(500).json({ error: 'Failed to refresh token: ' + (error?.message || 'Unknown error') });
-  }
-});
-
-// GET /twitter/refresh-credentials
-router.get('/refresh-credentials', async (req, res) => {
-  try {
-    // Check if we have the required tokens in the query parameters
-    const refreshToken = req.query?.refreshToken;
-    
-    if (!refreshToken) {
-      return res.status(400).json({ error: 'Refresh token is required' });
-    }
-    
-    console.log('Refreshing Twitter credentials for user-initiated request');
-    
-    // Attempt to refresh the tokens
-    const tokenData = await twitterService.refreshAccessToken(refreshToken);
-    
-    if (!tokenData?.access_token) {
-      console.error('Failed to refresh Twitter credentials');
-      return res.status(500).json({ 
-        success: false,
-        error: 'Failed to refresh Twitter credentials'
-      });
-    }
-    
-    console.log('Twitter credentials refreshed successfully');
-    
-    // Return the refreshed tokens
-    return res.json({
-      success: true,
+    res.status(200).json({
+      message: 'User info retrieved successfully',
       data: {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token
+        id_str: userInfo.id_str,
+        username: userInfo.screen_name,
+        name: userInfo.name,
+        profile_image_url: userInfo.profile_image_url_https || userInfo.profile_image_url
       }
     });
   } catch (error) {
-    console.error('Error refreshing Twitter credentials:', error?.message);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to refresh Twitter credentials: ' + (error?.message || 'Unknown error')
-    });
+    console.error('Error fetching Twitter user info:', error);
+    res.status(500).json({ error: 'Failed to fetch Twitter user info: ' + error.message });
   }
 });
 

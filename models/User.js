@@ -77,8 +77,7 @@ const UserSchema = new mongoose.Schema({
   },
   // For storing provider-specific data
   providerData: {
-    type: Map,
-    of: mongoose.Schema.Types.Mixed,
+    type: Object,
     default: {}
   },
   createdAt: {

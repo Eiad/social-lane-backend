@@ -276,7 +276,7 @@ const processPost = async (post) => {
             hasRefreshToken: !!twitter_refresh_token
           });
           
-          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret, twitter_refresh_token, 'legacy');
+          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret, 'legacy');
           results.twitter = [{ 
             success: true, 
             accountId: 'legacy',
@@ -333,7 +333,7 @@ const processPost = async (post) => {
               await new Promise(resolve => setTimeout(resolve, 5000));
             }
             
-            const twitterResult = await postToTwitter(video_url, post_description, accessToken, accessTokenSecret, refreshToken, userId);
+            const twitterResult = await postToTwitter(video_url, post_description, accessToken, accessTokenSecret, userId);
             
             results.twitter.push({
               success: true,
@@ -425,12 +425,11 @@ const postToTikTok = async (videoUrl, caption, accessToken, refreshToken) => {
 };
 
 // Post to Twitter
-const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, twitter_refresh_token, userId) => {
+const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, userId) => {
   try {
     console.log('Posting to Twitter with credentials:', { 
       hasAccessToken: !!accessToken, 
       hasAccessTokenSecret: !!accessTokenSecret,
-      hasRefreshToken: !!twitter_refresh_token,
       userId: userId || 'not provided'
     });
     
@@ -446,47 +445,7 @@ const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, twi
       console.log('Twitter API response:', response?.status, response?.statusText);
       return response?.data?.data || response?.data || {};
     } catch (error) {
-      // If we get a 401 (Unauthorized) error and we have a refresh token, try to refresh the token
-      if (error?.response?.status === 401 && twitter_refresh_token) {
-        console.log('Twitter authentication failed, attempting to refresh token...');
-        
-        try {
-          // Try to refresh the token
-          const refreshResponse = await axios.post(`${process.env.BACKEND_URL}/twitter/refresh-token`, {
-            refreshToken: twitter_refresh_token
-          });
-          
-          if (refreshResponse?.data?.data?.access_token) {
-            console.log('Twitter token refreshed successfully, retrying with new token');
-            const newAccessToken = refreshResponse.data.data.access_token;
-            
-            // Retry with new token
-            const retryResponse = await axios.post(`${process.env.BACKEND_URL}/twitter/post-video`, {
-              videoUrl,
-              text,
-              accessToken: newAccessToken,
-              accessTokenSecret,
-              userId
-            });
-            
-            console.log('Twitter API retry response:', retryResponse?.status, retryResponse?.statusText);
-            
-            // Return success with refreshed flag and new token
-            return {
-              ...(retryResponse?.data?.data || retryResponse?.data || {}),
-              refreshed: true,
-              newAccessToken
-            };
-          } else {
-            throw new Error('Failed to refresh Twitter token');
-          }
-        } catch (refreshError) {
-          console.error('Error refreshing Twitter token:', refreshError?.message);
-          throw new Error(`Failed to refresh Twitter token: ${refreshError?.message || 'Unknown error'}`);
-        }
-      }
-      
-      // Handle other errors
+      // Handle errors
       console.error('Error posting to Twitter:', error?.message);
       
       if (error.response) {

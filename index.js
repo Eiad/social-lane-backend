@@ -10,6 +10,7 @@ const postsRoutes = require('./routes/posts');
 const usersRoutes = require('./routes/users');
 const paypalRoutes = require('./routes/paypal');
 const rawBodyParser = require('./middleware/rawBodyParser');
+const axios = require('axios');
 
 const app = express();
 const port = process.env.PORT || 3335;
@@ -103,6 +104,19 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Request logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  
+  // Log request body for POST requests but omit sensitive data
+  if (req.method === 'POST' && req.body) {
+    const sanitizedBody = { ...req.body };
+    
+    // Remove sensitive fields
+    ['accessToken', 'refreshToken', 'accessTokenSecret'].forEach(field => {
+      if (sanitizedBody[field]) sanitizedBody[field] = '***REDACTED***';
+    });
+    
+    console.log(`Request body: ${JSON.stringify(sanitizedBody, null, 2)}`);
+  }
+  
   next();
 });
 
@@ -143,6 +157,142 @@ app.use('/upload', uploadRoutes);
 app.use('/posts', postsRoutes);
 app.use('/users', usersRoutes);
 app.use('/paypal', paypalRoutes);
+
+// Forward /schedules to /posts for backward compatibility
+app.post('/schedules', (req, res) => {
+  console.log('Forwarding request from /schedules to /posts for scheduling');
+  req.url = '/';
+  postsRoutes(req, res);
+});
+
+// Add a route handler for social/tiktok/post that forwards to the TikTok post-video endpoint
+app.post('/social/tiktok/post', async (req, res) => {
+  // Forward this request to the tiktok/post-video endpoint
+  console.log('Forwarding request from /social/tiktok/post to /tiktok/post-video');
+  
+  // Log the incoming payload structure
+  console.log('Incoming payload structure:', {
+    keys: req.body ? Object.keys(req.body) : [],
+    hasVideoUrl: !!req.body?.videoUrl,
+    hasAccounts: Array.isArray(req.body?.accounts) && req.body?.accounts.length > 0,
+    hasCaption: !!req.body?.caption,
+    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0
+  });
+  
+  // Handle multiple accounts case
+  if (req.body?.accounts && Array.isArray(req.body.accounts) && req.body.accounts.length > 0) {
+    const accounts = req.body.accounts;
+    const videoUrl = req.body.videoUrl || '';
+    const caption = req.body.caption || '';
+    const results = [];
+    
+    // Process each account in sequence
+    for (let i = 0; i < accounts.length; i++) {
+      const account = accounts[i];
+      
+      try {
+        console.log(`Processing TikTok account ${i+1}/${accounts.length}: ${account.displayName || account.openId}`);
+        
+        // Create a new request for this account
+        const accountRequest = {
+          method: 'POST',
+          url: `${process.env.BACKEND_URL}/tiktok/post-video`,
+          data: {
+            videoUrl: videoUrl,
+            accessToken: account.accessToken || '',
+            refreshToken: account.refreshToken || '',
+            caption: caption
+          },
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        };
+        
+        // Send request to the tiktok/post-video endpoint
+        const response = await axios(accountRequest);
+        
+        results.push({
+          accountId: account.openId,
+          displayName: account.displayName,
+          success: true,
+          data: response.data
+        });
+        
+        // Add a small delay between account requests to avoid rate limiting
+        if (i < accounts.length - 1) {
+          console.log(`Waiting 3 seconds before processing next TikTok account...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      } catch (error) {
+        console.error(`Error posting to TikTok account ${account.displayName || account.openId}:`, error?.message);
+        
+        results.push({
+          accountId: account.openId,
+          displayName: account.displayName,
+          success: false,
+          error: error?.message || 'Unknown error'
+        });
+      }
+    }
+    
+    // Return the combined results
+    return res.status(200).json({
+      success: results.some(r => r.success), // Overall success if at least one account succeeded
+      message: `Posted to ${results.filter(r => r.success).length}/${accounts.length} TikTok accounts`,
+      results: results
+    });
+  } 
+  // Handle single account cases (legacy format or direct access token)
+  else {
+    // Transform the payload to match what tiktok/post-video expects
+    const originalBody = { ...req.body };
+    let transformedBody = {};
+    
+    // Case 2: Direct format with accessToken already present
+    if (req.body?.accessToken) {
+      transformedBody = {
+        videoUrl: req.body.videoUrl || '',
+        accessToken: req.body.accessToken,
+        refreshToken: req.body.refreshToken || '',
+        caption: req.body.caption || ''
+      };
+      console.log('Using direct accessToken format');
+    }
+    // Case 3: Handle tiktokPayload format from social-posting.js
+    else if (req.body?.tiktokPayload) {
+      const payload = req.body.tiktokPayload;
+      if (payload.accounts && payload.accounts.length > 0) {
+        const firstAccount = payload.accounts[0];
+        transformedBody = {
+          videoUrl: payload.videoUrl || '',
+          accessToken: firstAccount.accessToken || '',
+          refreshToken: firstAccount.refreshToken || '',
+          caption: payload.caption || ''
+        };
+        console.log('Transformed from tiktokPayload format');
+      }
+    }
+    
+    // Check if we have the required fields
+    if (transformedBody.videoUrl && transformedBody.accessToken) {
+      req.body = transformedBody;
+      
+      console.log('Transformed payload:', {
+        hasVideoUrl: !!req.body.videoUrl,
+        hasAccessToken: !!req.body.accessToken,
+        hasRefreshToken: !!req.body.refreshToken,
+        hasCaption: !!req.body.caption
+      });
+    } else {
+      console.error('Failed to extract required fields from payload');
+      console.error('Original payload keys:', Object.keys(originalBody));
+      // Keep original body, the endpoint will return appropriate error
+    }
+    
+    req.url = '/post-video';
+    tiktokRoutes(req, res);
+  }
+});
 
 // TikTok domain verification file
 app.get('/tiktokxhM8HSGWC6UXDSySEBMtLOBidATHhofG.txt', (req, res) => {

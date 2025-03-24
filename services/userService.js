@@ -157,6 +157,8 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
         throw new Error('TikTok token data must be an array');
       }
       
+      console.log(`[USER SERVICE] Processing ${tokenData.length} TikTok accounts for user ${uid}`);
+      
       // Validate and clean each account's data
       const validatedAccounts = tokenData.map(account => ({
         accessToken: account?.accessToken || '',
@@ -171,6 +173,38 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
       
       // Update the user's TikTok accounts
       user.providerData.tiktok = validatedAccounts;
+      
+      // Try multiple methods to save TikTok accounts, just like we do for Twitter
+      
+      // 1. First try direct MongoDB update for reliability
+      try {
+        console.log(`[USER SERVICE] Performing direct MongoDB update for TikTok accounts for user ${user._id}`);
+        const mongoose = require('mongoose');
+        const db = mongoose.connection.db;
+        const usersCollection = db.collection('users');
+        
+        const updateResult = await usersCollection.updateOne(
+          { _id: user._id },
+          { $set: { 'providerData.tiktok': validatedAccounts, lastLogin: new Date() } }
+        );
+        
+        console.log('[USER SERVICE] Direct TikTok update result:', {
+          acknowledged: updateResult.acknowledged,
+          modifiedCount: updateResult.modifiedCount,
+          matchedCount: updateResult.matchedCount
+        });
+        
+        if (updateResult.acknowledged && updateResult.modifiedCount > 0) {
+          console.log('[USER SERVICE] Direct MongoDB update for TikTok successful');
+          
+          // Get the updated user with a fresh query to verify
+          const updatedUser = await User.findById(user._id);
+          return updatedUser;
+        }
+      } catch (directUpdateError) {
+        console.error('[USER SERVICE] Error with direct MongoDB update for TikTok:', directUpdateError);
+        // Continue to save() method
+      }
     } 
     // For Twitter, handle multiple accounts
     else if (provider === 'twitter') {
@@ -356,7 +390,7 @@ const removeTikTokAccount = async (uid, openId) => {
     }
     
     // Get current TikTok accounts
-    const tiktokAccounts = user?.providerData?.get('tiktok') || [];
+    const tiktokAccounts = user?.providerData?.tiktok || [];
     
     // If no TikTok accounts, nothing to remove
     if (!Array.isArray(tiktokAccounts) || tiktokAccounts.length === 0) {

@@ -12,6 +12,21 @@ const TikTokAccountSchema = new mongoose.Schema({
   openId: {
     type: String,
     required: true
+  },
+  username: {
+    type: String
+  },
+  displayName: {
+    type: String
+  },
+  avatarUrl: {
+    type: String
+  },
+  avatarUrl100: {
+    type: String
+  },
+  index: {
+    type: Number
   }
 }, { _id: false }); // _id: false prevents MongoDB from adding an _id field to subdocuments
 
@@ -31,6 +46,12 @@ const TwitterAccountSchema = new mongoose.Schema({
   },
   username: {
     type: String
+  },
+  name: {
+    type: String
+  },
+  profileImageUrl: {
+    type: String
   }
 }, { _id: false });
 
@@ -44,7 +65,7 @@ const PostSchema = new mongoose.Schema({
   },
   post_description: {
     type: String,
-    required: true
+    default: ''
   },
   platforms: {
     type: [String],

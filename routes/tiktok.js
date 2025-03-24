@@ -115,17 +115,37 @@ router.post('/post-video', async (req, res) => {
       return res.status(400).json({ error: 'Video URL and access token are required' });
     }
 
-    const result = await tiktokService.postVideo(videoUrl, accessToken, caption, refreshToken);
-    
-    console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
-    console.log('=== TIKTOK POST VIDEO ROUTE END ===');
-    
-    res.status(200).json({ message: 'Video posted successfully', data: result });
+    console.log('=== TIKTOK POST VIDEO ROUTE START ===');
+    console.log('Posting video to TikTok with URL:', videoUrl);
+
+    try {
+      const result = await tiktokService.postVideo(videoUrl, accessToken, caption, refreshToken);
+      
+      console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
+      console.log('=== TIKTOK POST VIDEO ROUTE END ===');
+      
+      res.status(200).json({ message: 'Video posted successfully', data: result });
+    } catch (postError) {
+      console.error('=== TIKTOK POST VIDEO ROUTE ERROR ===');
+      console.error('Error posting video:', postError?.message);
+      console.error('Error stack:', postError?.stack);
+      
+      // Send a properly formatted JSON response
+      return res.status(500).json({ 
+        error: 'Failed to post video to TikTok: ' + (postError?.message || 'Unknown error'),
+        errorCode: postError?.code || 'UNKNOWN_ERROR'
+      });
+    }
   } catch (error) {
     console.error('=== TIKTOK POST VIDEO ROUTE ERROR ===');
     console.error('Error posting video:', error?.message);
     console.error('Error stack:', error?.stack);
-    res.status(500).json({ error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error') });
+    
+    // Send a properly formatted JSON response
+    res.status(500).json({ 
+      error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error'),
+      errorCode: error?.code || 'UNKNOWN_ERROR'
+    });
   }
 });
 

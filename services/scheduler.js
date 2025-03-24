@@ -467,44 +467,62 @@ const postToTwitter = async (videoUrl, text, accessToken, accessTokenSecret, use
   }
 };
 
-// Add a helper function to check user limits
+// Check if a user has reached their limits for posts
 const checkUserLimits = async (userId, postType) => {
   try {
+    if (!userId) {
+      return {
+        allowed: false,
+        message: 'User ID is required'
+      };
+    }
+    
     // Find the user
     const user = await User.findOne({ uid: userId });
     if (!user) {
-      console.error(`User not found with ID: ${userId}`);
-      return { allowed: false, reason: 'User not found' };
+      return {
+        allowed: false,
+        message: 'User not found'
+      };
     }
     
-    // Get user role - default to Starter if not set
-    const role = user.role || 'Starter';
+    const userRole = user.role || 'Starter';
     
+    // Handle scheduled posts
     if (postType === 'scheduled') {
-      // Count user's existing scheduled posts
-      const scheduledPostsCount = await Post.countDocuments({ 
-        userId, 
+      // Count existing scheduled posts
+      const scheduledPostsCount = await Post.countDocuments({
+        userId,
         isScheduled: true,
         status: 'pending'
       });
       
       // Check if user has reached their limit
-      if (hasReachedLimit(role, 'scheduledPosts', scheduledPostsCount)) {
-        console.log(`User ${userId} with role ${role} has reached scheduled posts limit`);
-        return { 
-          allowed: false, 
-          reason: 'Scheduled posts limit reached',
-          limit: role === 'Starter' ? 30 : 'unlimited',
+      if (hasReachedLimit(userRole, 'scheduledPosts', scheduledPostsCount)) {
+        const limit = userRole === 'Starter' ? 5 : 
+                     userRole === 'Launch' ? 30 :
+                     'unlimited';
+        
+        return {
+          allowed: false,
+          message: `You have reached the maximum of ${limit} scheduled posts for your ${userRole} plan`,
+          limit,
           current: scheduledPostsCount
         };
       }
     }
     
-    // All checks passed
-    return { allowed: true };
+    // If no limits were reached or not checking limits
+    return {
+      allowed: true
+    };
   } catch (error) {
-    console.error('Error checking user limits:', error);
-    return { allowed: false, reason: 'Error checking limits' };
+    console.error('Error checking user limits:', error?.message);
+    // Default to allowing post if there's an error checking
+    return {
+      allowed: true,
+      warning: 'Unable to verify limits'
+    };
   }
 };
 

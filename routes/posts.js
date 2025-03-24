@@ -79,6 +79,14 @@ router.get('/user/:userId', async (req, res) => {
 // @access  Public (should be Private in production)
 router.post('/', async (req, res) => {
   try {
+    console.log('Received post creation request:', {
+      hasVideoUrl: !!req.body.video_url,
+      hasUserId: !!req.body.userId,
+      hasPlatforms: !!req.body.platforms,
+      isScheduled: !!req.body.isScheduled,
+      scheduledDate: req.body.scheduledDate
+    });
+    
     // Extract data from request
     const { 
       video_url, 
@@ -98,39 +106,53 @@ router.post('/', async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!video_url || !post_description || !platforms || !userId) {
-      return res.status(400).json({
+    if (!video_url) {
+      return res.status(400).json({ 
         success: false,
-        error: 'Please provide required fields: video_url, post_description, platforms, userId'
+        error: 'Video URL is required' 
       });
     }
 
-    // Check if it's a scheduled post
-    if (isScheduled) {
-      // Check user limits for scheduled posts
-      const user = await User.findOne({ uid: userId });
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-
-      // Count existing scheduled posts for this user
-      const scheduledPostsCount = await Post.countDocuments({
-        userId,
-        isScheduled: true,
-        status: 'pending'
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
       });
+    }
 
-      // Check if user has reached their limit
-      if (hasReachedLimit(user.role || 'Starter', 'scheduledPosts', scheduledPostsCount)) {
-        return res.status(403).json({
-          success: false,
-          error: 'Scheduled posts limit reached',
-          limit: user.role === 'Starter' ? 30 : 'unlimited',
-          current: scheduledPostsCount
-        });
+    // Check user limits if scheduling posts
+    if (isScheduled) {
+      try {
+        // Check limits for scheduled posts
+        const limitCheck = await checkUserLimits(userId, 'scheduled');
+        if (!limitCheck.allowed) {
+          return res.status(403).json({
+            success: false,
+            error: limitCheck.message || 'You have reached the maximum number of scheduled posts for your plan'
+          });
+        }
+        
+        // Validate scheduled date
+        if (!scheduledDate) {
+          return res.status(400).json({
+            success: false,
+            error: 'Scheduled date is required for scheduled posts'
+          });
+        }
+        
+        // Check that the scheduled date is in the future
+        const scheduledDateTime = new Date(scheduledDate);
+        const now = new Date();
+        
+        if (scheduledDateTime <= now) {
+          return res.status(400).json({
+            success: false,
+            error: 'Scheduled date must be in the future'
+          });
+        }
+      } catch (error) {
+        console.error('Error checking user limits:', error);
+        // Continue processing even if there's an error checking limits
       }
     }
 
@@ -172,19 +194,34 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Prepare post data
-    const postData = {
+    // Create post object with basic info
+    let postData = {
       video_url,
-      post_description,
-      platforms,
-      userId
+      userId,
+      isScheduled: !!isScheduled
     };
-
+    
     // Add optional fields if they exist
     if (video_id) postData.video_id = video_id;
-    if (isScheduled !== undefined) postData.isScheduled = isScheduled;
-    if (scheduledDate) postData.scheduledDate = scheduledDate;
+    if (post_description) postData.post_description = post_description;
     
+    // Set scheduled date if provided
+    if (isScheduled && scheduledDate) {
+      postData.scheduledDate = scheduledDate;
+    }
+    
+    // Handle platforms array or string
+    if (platforms) {
+      if (Array.isArray(platforms)) {
+        postData.platforms = platforms;
+      } else if (typeof platforms === 'string') {
+        postData.platforms = [platforms];
+      } else if (typeof platforms === 'object') {
+        // Extract platform names from object keys
+        postData.platforms = Object.keys(platforms);
+      }
+    }
+
     // Handle TikTok accounts
     if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
       // Make sure the TikTok accounts have the right schema format

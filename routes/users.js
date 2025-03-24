@@ -325,16 +325,46 @@ router.delete('/:uid/social/twitter', async (req, res) => {
 router.post('/:uid/social/tiktok', async (req, res) => {
   try {
     const { uid } = req.params;
-    const tokenData = req.body;
+    let tokenData = req.body;
     
-    if (!tokenData || !Array.isArray(tokenData)) {
+    console.log(`[TIKTOK SAVE] Received data for user ${uid}`, JSON.stringify({
+      dataType: typeof tokenData,
+      isArray: Array.isArray(tokenData),
+      dataLength: Array.isArray(tokenData) ? tokenData.length : 'not an array',
+      sampleKeys: tokenData ? Object.keys(tokenData).slice(0, 5) : []
+    }));
+    
+    // Ensure tokenData is an array for consistent processing
+    if (!Array.isArray(tokenData)) {
+      console.log('[TIKTOK SAVE] Converting to array since input is not an array');
+      
+      // If tokenData has accessToken and openId, treat it as a single account
+      if (tokenData?.accessToken && tokenData?.openId) {
+        tokenData = [tokenData];
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid TikTok token data format. Expected an array or a single account object.'
+        });
+      }
+    }
+    
+    // Validate that each item has the required fields
+    const validTokens = tokenData.filter(token => token?.accessToken && token?.openId);
+    
+    if (validTokens.length === 0) {
+      console.log('[TIKTOK SAVE] No valid TikTok tokens found in data');
       return res.status(400).json({
         success: false,
-        error: 'TikTok token data should be an array'
+        error: 'No valid TikTok accounts found. Each account requires accessToken and openId.'
       });
     }
     
-    const user = await userService.updateSocialMediaTokens(uid, 'tiktok', tokenData);
+    console.log(`[TIKTOK SAVE] Processing ${validTokens.length} valid TikTok accounts for user ${uid}`);
+    
+    const user = await userService.updateSocialMediaTokens(uid, 'tiktok', validTokens);
+    
+    console.log(`[TIKTOK SAVE] Successfully saved TikTok accounts for user ${uid}`);
     
     res.status(200).json({
       success: true,
@@ -344,7 +374,7 @@ router.post('/:uid/social/tiktok', async (req, res) => {
     console.error('Error updating TikTok tokens:', error);
     res.status(500).json({
       success: false,
-      error: 'Server error'
+      error: 'Server error: ' + (error?.message || 'Unknown error')
     });
   }
 });

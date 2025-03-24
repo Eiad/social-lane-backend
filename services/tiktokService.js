@@ -178,15 +178,43 @@ async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '')
         timeout: 30000
       });
       
-      console.log('Video init response from TikTok:', JSON.stringify(initResponse?.data, null, 2));
+      // Safely log and parse the response
+      try {
+        if (initResponse?.data) {
+          console.log('Video init response from TikTok:', JSON.stringify(initResponse?.data, null, 2));
+        } else {
+          console.log('Video init response from TikTok: [empty data]');
+        }
+      } catch (logError) {
+        console.error('Error logging response:', logError?.message);
+      }
     } catch (initError) {
-      handleTikTokError(initError);
+      // Check if the response is HTML or other non-JSON format
+      if (initError?.response?.headers?.['content-type']?.includes('text/html')) {
+        console.error('=== TikTok returned HTML instead of JSON ===');
+        const htmlResponse = initError?.response?.data?.toString().substring(0, 500);
+        console.error('HTML Response (first 500 chars):', htmlResponse);
+        throw new Error('TikTok API returned HTML instead of JSON. Please check your TikTok credentials or try again later.');
+      }
+      
+      // Try to safely handle the error response
+      try {
+        handleTikTokError(initError);
+      } catch (handleError) {
+        console.error('Error handling TikTok API error:', handleError?.message);
+        throw new Error('Failed to process TikTok API error: ' + (handleError?.message || initError?.message));
+      }
     }
     
     if (initResponse?.data?.data?.publish_id) {
       return await handleVideoUploadStatus(initResponse.data.data.publish_id, tokenToUse, refreshToken);
     } else if (initResponse?.data?.error) {
-      handleTikTokError(new Error(initResponse.data.error.message || initResponse.data.error.code));
+      try {
+        handleTikTokError(new Error(initResponse.data.error.message || initResponse.data.error.code));
+      } catch (handleError) {
+        console.error('Error handling TikTok API error from response:', handleError?.message);
+        throw new Error('TikTok API error: ' + (initResponse?.data?.error?.message || initResponse?.data?.error?.code));
+      }
     } else {
       console.error('Failed to get publish_id from init response:', JSON.stringify(initResponse?.data, null, 2));
       throw new Error('Failed to initialize video upload');

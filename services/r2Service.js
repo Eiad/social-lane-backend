@@ -35,7 +35,7 @@ async function uploadFile(fileBuffer, fileName, contentType) {
     console.log(`[R2Service] Upload successful:`, response);
     
     // Generate the public URL for the uploaded file
-    const fileUrl = `${process.env.R2_PUBLIC_DOMAIN}/${uniqueFileName}`;
+    const fileUrl = `${process.env.R2_MEDIA_PUBLIC_DOMAIN}/${uniqueFileName}`;
     
     return {
       success: true,

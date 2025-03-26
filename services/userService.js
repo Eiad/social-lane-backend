@@ -59,6 +59,37 @@ const getUserByUid = async (uid) => {
 };
 
 /**
+ * Get a user's social media tokens for a specific platform
+ * @param {string} uid - Firebase UID
+ * @param {string} platform - Social media platform (e.g., 'twitter', 'tiktok')
+ * @returns {Promise<Array|Object|null>} - The tokens for the specified platform or null if not found
+ */
+const getSocialMediaTokens = async (uid, platform) => {
+  try {
+    console.log(`[USER SERVICE] Getting ${platform} tokens for user ${uid}`);
+    
+    // Get the user
+    const user = await User.findOne({ uid });
+    if (!user) {
+      console.warn(`[USER SERVICE] User not found with UID: ${uid}`);
+      return null;
+    }
+    
+    // Check if the user has provider data for the requested platform
+    if (!user.providerData || !user.providerData[platform]) {
+      console.warn(`[USER SERVICE] No ${platform} provider data found for user ${uid}`);
+      return null;
+    }
+    
+    console.log(`[USER SERVICE] Found ${platform} tokens for user ${uid}`);
+    return user.providerData[platform];
+  } catch (error) {
+    console.error(`[USER SERVICE] Error getting ${platform} tokens for user ${uid}:`, error);
+    throw error;
+  }
+};
+
+/**
  * Update a user's role
  * @param {string} uid - Firebase UID
  * @param {string} role - New role ('Starter', 'Launch', 'Rise', or 'Scale')
@@ -121,7 +152,7 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
   
   try {
     // First get the user to check current tokens
-    const user = await User.findOne({ uid });
+    let user = await User.findOne({ uid });
     
     if (!user) {
       console.error(`[USER SERVICE] User not found with UID: ${uid}`);
@@ -171,8 +202,46 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
         index: account?.index || 0
       }));
       
+      // Initialize tiktok array if it doesn't exist
+      if (!user.providerData.tiktok) {
+        user.providerData.tiktok = [];
+      }
+      
+      // Merge existing accounts with new ones, avoiding duplicates
+      const existingAccounts = user.providerData.tiktok || [];
+      console.log(`[USER SERVICE] User has ${existingAccounts.length} existing TikTok accounts`);
+      
+      // Create merged account list
+      const mergedAccounts = [...existingAccounts];
+      
+      // Add new accounts, avoiding duplicates based on openId
+      for (const newAccount of validatedAccounts) {
+        const existingIndex = mergedAccounts.findIndex(acc => acc.openId === newAccount.openId);
+        
+        if (existingIndex !== -1) {
+          // Update existing account with new data
+          console.log(`[USER SERVICE] Updating existing TikTok account: ${newAccount.openId}`);
+          mergedAccounts[existingIndex] = {
+            ...mergedAccounts[existingIndex],
+            ...newAccount,
+          };
+        } else {
+          // Add new account
+          console.log(`[USER SERVICE] Adding new TikTok account: ${newAccount.openId}`);
+          mergedAccounts.push(newAccount);
+        }
+      }
+      
+      // Ensure all accounts have proper index values
+      const reindexedAccounts = mergedAccounts.map((account, idx) => ({
+        ...account,
+        index: idx + 1
+      }));
+      
+      console.log(`[USER SERVICE] Final TikTok account count: ${reindexedAccounts.length}`);
+      
       // Update the user's TikTok accounts
-      user.providerData.tiktok = validatedAccounts;
+      user.providerData.tiktok = reindexedAccounts;
       
       // Try multiple methods to save TikTok accounts, just like we do for Twitter
       
@@ -185,7 +254,7 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
         
         const updateResult = await usersCollection.updateOne(
           { _id: user._id },
-          { $set: { 'providerData.tiktok': validatedAccounts, lastLogin: new Date() } }
+          { $set: { 'providerData.tiktok': reindexedAccounts, lastLogin: new Date() } }
         );
         
         console.log('[USER SERVICE] Direct TikTok update result:', {
@@ -529,6 +598,7 @@ const createUser = async (userData) => {
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
+  getSocialMediaTokens,
   updateUserRole,
   isUserPro,
   updateSocialMediaTokens,

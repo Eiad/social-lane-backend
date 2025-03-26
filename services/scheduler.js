@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const { hasReachedLimit } = require('../utils/roleLimits');
+const userService = require('./userService');
 
 // Initialize the scheduler
 const initScheduler = () => {
@@ -152,11 +153,16 @@ const processPost = async (post) => {
     tiktok_refresh_token,
     twitter_access_token,
     twitter_access_token_secret,
-    twitter_refresh_token
+    twitter_refresh_token,
+    twitter_accounts
   } = post;
   
   if (!video_url || !platforms || platforms.length === 0) {
     throw new Error('Invalid post data');
+  }
+  
+  if (!userId) {
+    throw new Error('User ID is required for post processing');
   }
   
   console.log('Post data for processing:', {
@@ -167,8 +173,46 @@ const processPost = async (post) => {
     tiktok_accounts_count: tiktok_accounts?.length || 0,
     has_legacy_tiktok: !!tiktok_access_token,
     has_twitter: !!twitter_access_token && !!twitter_access_token_secret,
-    has_twitter_refresh: !!twitter_refresh_token
+    has_twitter_refresh: !!twitter_refresh_token,
+    has_twitter_accounts: !!twitter_accounts && Array.isArray(twitter_accounts) && twitter_accounts.length > 0,
   });
+  
+  // Check if we need to retrieve tokens from the database
+  let updatedTiktokAccounts = tiktok_accounts;
+  let updatedTwitterAccounts = twitter_accounts;
+  
+  // Fetch TikTok tokens from database if not provided in post
+  if (platforms.includes('tiktok') && (!tiktok_accounts || tiktok_accounts.length === 0) && !tiktok_access_token) {
+    console.log(`No TikTok tokens in post, retrieving from database for user ${userId}`);
+    try {
+      const tiktokTokens = await userService.getSocialMediaTokens(userId, 'tiktok');
+      if (tiktokTokens && Array.isArray(tiktokTokens) && tiktokTokens.length > 0) {
+        console.log(`Found ${tiktokTokens.length} TikTok accounts in database for user ${userId}`);
+        updatedTiktokAccounts = tiktokTokens;
+      } else {
+        console.warn(`No TikTok tokens found in database for user ${userId}`);
+      }
+    } catch (error) {
+      console.error(`Error retrieving TikTok tokens from database:`, error?.message);
+    }
+  }
+  
+  // Fetch Twitter tokens from database if not provided in post
+  if (platforms.includes('twitter') && (!twitter_accounts || twitter_accounts.length === 0) && 
+      (!twitter_access_token || !twitter_access_token_secret)) {
+    console.log(`No Twitter tokens in post, retrieving from database for user ${userId}`);
+    try {
+      const twitterTokens = await userService.getSocialMediaTokens(userId, 'twitter');
+      if (twitterTokens && Array.isArray(twitterTokens) && twitterTokens.length > 0) {
+        console.log(`Found ${twitterTokens.length} Twitter accounts in database for user ${userId}`);
+        updatedTwitterAccounts = twitterTokens;
+      } else {
+        console.warn(`No Twitter tokens found in database for user ${userId}`);
+      }
+    } catch (error) {
+      console.error(`Error retrieving Twitter tokens from database:`, error?.message);
+    }
+  }
   
   const results = {};
   let tokenUpdates = {};
@@ -186,13 +230,13 @@ const processPost = async (post) => {
       
       if (platform === 'tiktok') {
         // TikTok posting logic (multiple accounts)
-        if (tiktok_accounts && tiktok_accounts.length > 0) {
-          console.log(`Found ${tiktok_accounts.length} TikTok accounts to post to`);
+        if (updatedTiktokAccounts && updatedTiktokAccounts.length > 0) {
+          console.log(`Found ${updatedTiktokAccounts.length} TikTok accounts to post to`);
           
           const accountResults = [];
           
-          for (let i = 0; i < tiktok_accounts.length; i++) {
-            const account = tiktok_accounts[i];
+          for (let i = 0; i < updatedTiktokAccounts.length; i++) {
+            const account = updatedTiktokAccounts[i];
             console.log(`TikTok account ${i + 1}:`, {
               openId: account.openId,
               hasAccessToken: !!account.accessToken,
@@ -217,8 +261,8 @@ const processPost = async (post) => {
               console.log(`TikTok posting completed successfully for account ${account.openId}`);
               
               // Add a 5-second delay between accounts if not the last account
-              if (i < tiktok_accounts.length - 1) {
-                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${tiktok_accounts[i+1].openId})`);
+              if (i < updatedTiktokAccounts.length - 1) {
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1].openId})`);
                 await new Promise(resolve => setTimeout(resolve, 5000));
               }
             } catch (accountError) {
@@ -230,8 +274,8 @@ const processPost = async (post) => {
               });
               
               // Still add delay even if posting failed
-              if (i < tiktok_accounts.length - 1) {
-                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${tiktok_accounts[i+1].openId})`);
+              if (i < updatedTiktokAccounts.length - 1) {
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1].openId})`);
                 await new Promise(resolve => setTimeout(resolve, 5000));
               }
             }
@@ -267,45 +311,14 @@ const processPost = async (post) => {
           console.warn('No TikTok credentials found for scheduled post');
         }
       }
-      else if (platform === 'twitter' && twitter_access_token && twitter_access_token_secret) {
-        // Post to Twitter using legacy single account format (for backward compatibility)
-        try {
-          console.log('Posting to Twitter with legacy credentials:', { 
-            hasAccessToken: !!twitter_access_token, 
-            hasAccessTokenSecret: !!twitter_access_token_secret,
-            hasRefreshToken: !!twitter_refresh_token
-          });
-          
-          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret, 'legacy');
-          results.twitter = [{ 
-            success: true, 
-            accountId: 'legacy',
-            ...twitterResult 
-          }];
-          
-          // Check if tokens were refreshed and store them for later update
-          if (twitterResult?.refreshed && twitterResult?.newAccessToken) {
-            console.log('Twitter tokens were refreshed, will update post with new tokens');
-            tokenUpdates.twitter_access_token = twitterResult.newAccessToken;
-          }
-          
-          console.log('Twitter posting completed successfully with legacy account');
-        } catch (twitterError) {
-          console.error('Error posting to Twitter with legacy account:', twitterError?.message);
-          results.twitter = [{ 
-            success: false, 
-            accountId: 'legacy',
-            error: twitterError?.message 
-          }];
-        }
-      } else if (platform === 'twitter' && post.twitter_accounts && Array.isArray(post.twitter_accounts) && post.twitter_accounts.length > 0) {
+      else if (platform === 'twitter' && updatedTwitterAccounts && updatedTwitterAccounts.length > 0) {
         // Post to Twitter with multiple accounts
-        console.log(`Found ${post.twitter_accounts.length} Twitter accounts to post to`);
+        console.log(`Found ${updatedTwitterAccounts.length} Twitter accounts to post to`);
         results.twitter = [];
         const twitterTokenUpdates = {};
         
         // Process each Twitter account
-        for (const account of post.twitter_accounts) {
+        for (const account of updatedTwitterAccounts) {
           try {
             const { accessToken, accessTokenSecret, refreshToken, userId, username } = account;
             
@@ -362,13 +375,44 @@ const processPost = async (post) => {
         
         // If we have token updates, we'll need to update the post
         if (Object.keys(twitterTokenUpdates).length > 0) {
-          tokenUpdates.twitter_accounts = post.twitter_accounts.map(account => {
+          tokenUpdates.twitter_accounts = updatedTwitterAccounts.map(account => {
             const updates = twitterTokenUpdates[account.userId];
             if (updates) {
               return { ...account, ...updates };
             }
             return account;
           });
+        }
+      } else if (platform === 'twitter' && twitter_access_token && twitter_access_token_secret) {
+        // Post to Twitter using legacy single account format (for backward compatibility)
+        try {
+          console.log('Posting to Twitter with legacy credentials:', { 
+            hasAccessToken: !!twitter_access_token, 
+            hasAccessTokenSecret: !!twitter_access_token_secret,
+            hasRefreshToken: !!twitter_refresh_token
+          });
+          
+          const twitterResult = await postToTwitter(video_url, post_description, twitter_access_token, twitter_access_token_secret, 'legacy');
+          results.twitter = [{ 
+            success: true, 
+            accountId: 'legacy',
+            ...twitterResult 
+          }];
+          
+          // Check if tokens were refreshed and store them for later update
+          if (twitterResult?.refreshed && twitterResult?.newAccessToken) {
+            console.log('Twitter tokens were refreshed, will update post with new tokens');
+            tokenUpdates.twitter_access_token = twitterResult.newAccessToken;
+          }
+          
+          console.log('Twitter posting completed successfully with legacy account');
+        } catch (twitterError) {
+          console.error('Error posting to Twitter with legacy account:', twitterError?.message);
+          results.twitter = [{ 
+            success: false, 
+            accountId: 'legacy',
+            error: twitterError?.message 
+          }];
         }
       } else if (platform === 'twitter') {
         console.warn('Twitter credentials are missing');

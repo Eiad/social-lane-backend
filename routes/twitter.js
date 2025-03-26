@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const twitterService = require('../services/twitterService');
+const userService = require('../services/userService');
 const { TwitterApi } = require('twitter-api-v2');
 
 // Store request tokens temporarily (in a real app, use a database or session)
@@ -177,24 +178,57 @@ router.post('/post-video', async (req, res) => {
     
     const { videoUrl, accessToken, accessTokenSecret, text, userId } = req?.body || {};
     
-    if (!videoUrl || !accessToken) {
-      console.log('Missing required parameters:', {
+    if (!videoUrl) {
+      console.log('Missing required parameter: videoUrl');
+      return res.status(400).json({ error: 'Video URL is required' });
+    }
+
+    // Check if we need to get tokens from the database
+    let finalAccessToken = accessToken;
+    let finalAccessTokenSecret = accessTokenSecret;
+    
+    // If tokens are missing but userId is provided, try to get tokens from the database
+    if ((!finalAccessToken || !finalAccessTokenSecret) && userId) {
+      console.log(`Tokens not provided in request, retrieving from database for user ${userId}`);
+      try {
+        const twitterTokens = await userService.getSocialMediaTokens(userId, 'twitter');
+        
+        // If there are tokens in the database, use the first account's tokens
+        if (twitterTokens && Array.isArray(twitterTokens) && twitterTokens.length > 0) {
+          const firstAccount = twitterTokens[0];
+          if (firstAccount.accessToken && firstAccount.accessTokenSecret) {
+            console.log(`Found Twitter tokens in database for user ${userId} (account: ${firstAccount.username || firstAccount.userId})`);
+            finalAccessToken = firstAccount.accessToken;
+            finalAccessTokenSecret = firstAccount.accessTokenSecret;
+          }
+        } else {
+          console.warn(`No Twitter tokens found in database for user ${userId}`);
+        }
+      } catch (error) {
+        console.error(`Error retrieving Twitter tokens from database:`, error?.message);
+      }
+    }
+    
+    // Check if we have the tokens we need
+    if (!finalAccessToken || !finalAccessTokenSecret) {
+      console.log('Missing required parameters after database lookup:', {
         hasVideoUrl: !!videoUrl,
-        hasAccessToken: !!accessToken
+        hasAccessToken: !!finalAccessToken,
+        hasAccessTokenSecret: !!finalAccessTokenSecret
       });
-      return res.status(400).json({ error: 'Video URL and access token are required' });
+      return res.status(400).json({ error: 'Twitter access token and secret are required' });
     }
 
     console.log('Posting video to Twitter with URL:', videoUrl);
     console.log('Twitter credentials check:', {
-      hasAccessToken: !!accessToken,
-      hasAccessTokenSecret: !!accessTokenSecret,
-      accessTokenPrefix: accessToken ? accessToken.substring(0, 5) + '...' : 'missing',
-      accessTokenSecretPrefix: accessTokenSecret ? accessTokenSecret.substring(0, 5) + '...' : 'missing',
+      hasAccessToken: !!finalAccessToken,
+      hasAccessTokenSecret: !!finalAccessTokenSecret,
+      accessTokenPrefix: finalAccessToken ? finalAccessToken.substring(0, 5) + '...' : 'missing',
+      accessTokenSecretPrefix: finalAccessTokenSecret ? finalAccessTokenSecret.substring(0, 5) + '...' : 'missing',
       userId: userId || 'not provided'
     });
 
-    const result = await twitterService.postMediaTweet(videoUrl, accessToken, text, accessTokenSecret);
+    const result = await twitterService.postMediaTweet(videoUrl, finalAccessToken, text, finalAccessTokenSecret);
     
     console.log('Twitter post result:', JSON.stringify(result || {}, null, 2));
     console.log('=== TWITTER POST VIDEO ROUTE END ===');
@@ -220,7 +254,7 @@ router.post('/post-video', async (req, res) => {
 // POST /twitter/post-video-multi
 router.post('/post-video-multi', async (req, res) => {
   try {
-    const { videoUrl, accounts, text } = req?.body || {};
+    const { videoUrl, accounts, text, userId } = req?.body || {};
     
     if (!videoUrl || !accounts || !Array.isArray(accounts) || accounts.length === 0) {
       console.log('Missing required parameters for multi-account posting:', {
@@ -232,8 +266,32 @@ router.post('/post-video-multi', async (req, res) => {
       return res.status(400).json({ error: 'Video URL and at least one account are required' });
     }
 
+    // Check if userId is provided to fetch tokens from the database
+    if (!userId) {
+      console.log('Missing required parameter: userId');
+      return res.status(400).json({ error: 'User ID is required to fetch Twitter tokens from the database' });
+    }
+
     console.log('=== TWITTER POST VIDEO MULTI ROUTE START ===');
     console.log(`Posting video to ${accounts.length} Twitter accounts with URL:`, videoUrl);
+
+    // Fetch Twitter tokens from the database for the user
+    let twitterAccounts;
+    try {
+      console.log(`Looking up tokens for user ${userId} in the database`);
+      const userTwitterData = await userService.getSocialMediaTokens(userId, 'twitter');
+      
+      if (!userTwitterData || (Array.isArray(userTwitterData) && userTwitterData.length === 0)) {
+        console.error(`No Twitter data found for user ${userId}`);
+        return res.status(404).json({ error: 'No Twitter accounts found for this user' });
+      }
+      
+      twitterAccounts = Array.isArray(userTwitterData) ? userTwitterData : [userTwitterData];
+      console.log(`Found ${twitterAccounts.length} Twitter account(s) in the database for user ${userId}`);
+    } catch (error) {
+      console.error(`Error fetching Twitter tokens for user ${userId}:`, error);
+      return res.status(500).json({ error: 'Failed to fetch Twitter tokens from the database' });
+    }
 
     const results = [];
     
@@ -244,12 +302,40 @@ router.post('/post-video-multi', async (req, res) => {
       try {
         console.log(`Processing Twitter account ${i+1}/${accounts.length}: ${account.username || account.userId}`);
         
+        // Find the matching account in the database
+        const dbAccount = twitterAccounts.find(acc => acc.userId === account.userId);
+        
+        if (!dbAccount) {
+          console.error(`No database entry found for Twitter account: ${account.username || account.userId}`);
+          results.push({
+            accountId: account.userId,
+            username: account.username || '',
+            success: false,
+            error: 'Account not found in database'
+          });
+          continue;
+        }
+        
+        // Check if we have the tokens
+        if (!dbAccount.accessToken || !dbAccount.accessTokenSecret) {
+          console.error(`Missing tokens for Twitter account: ${account.username || account.userId}`);
+          results.push({
+            accountId: account.userId,
+            username: account.username || '',
+            success: false,
+            error: 'Missing authentication tokens for this account'
+          });
+          continue;
+        }
+
+        console.log(`Using Twitter tokens from database for account ${account.username || account.userId}`);
+        
         // Post to Twitter with this account - use postMediaTweet instead of postVideo
         const result = await twitterService.postMediaTweet(
           videoUrl, 
-          account.accessToken,
+          dbAccount.accessToken,
           text || '',
-          account.accessTokenSecret
+          dbAccount.accessTokenSecret
         );
         
         results.push({

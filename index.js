@@ -32,7 +32,7 @@ console.log('- BACKEND_URL:', process.env.BACKEND_URL);
 console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
 console.log('- R2_BUCKET_NAME:', process.env.R2_BUCKET_NAME);
 console.log('- R2_ENDPOINT:', process.env.R2_ENDPOINT);
-console.log('- R2_PUBLIC_DOMAIN:', process.env.R2_PUBLIC_DOMAIN);
+console.log('- R2_MEDIA_PUBLIC_DOMAIN:', process.env.R2_MEDIA_PUBLIC_DOMAIN);
 
 // Enable CORS for frontend with proper configuration
 const allowedOrigins = [
@@ -40,7 +40,9 @@ const allowedOrigins = [
   'https://sociallane-frontend.mindio.chat',
   'http://localhost:3334',
   'http://localhost:3000',
-  'https://media.mindio.chat'
+  'https://media.mindio.chat',
+  'https://assets.code-park.com',
+  'https://sociallanemedia.code-park.com'
 ];
 
 console.log('CORS allowed origins:', allowedOrigins);
@@ -290,7 +292,8 @@ app.post('/social/twitter/post', async (req, res) => {
         data: {
           videoUrl: req.body.videoUrl || '',
           text: req.body.text || req.body.caption || '',
-          accounts: req.body.accounts
+          accounts: req.body.accounts,
+          userId: req.body.userId // Forward the userId parameter for database token lookup
         },
         headers: {
           'Content-Type': 'application/json'
@@ -351,7 +354,7 @@ app.get('/', (req, res) => {
     environment: {
       backend_url: process.env.BACKEND_URL,
       frontend_url: process.env.FRONTEND_URL,
-      r2_public_domain: process.env.R2_PUBLIC_DOMAIN
+      R2_MEDIA_PUBLIC_DOMAIN: process.env.R2_MEDIA_PUBLIC_DOMAIN
     }
   });
 });
@@ -360,5 +363,5 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`Backend URL: ${process.env.BACKEND_URL}`);
   console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`R2 Public Domain: ${process.env.R2_PUBLIC_DOMAIN}`);
+  console.log(`R2 Public Domain: ${process.env.R2_MEDIA_PUBLIC_DOMAIN}`);
 });

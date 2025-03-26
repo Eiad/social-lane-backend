@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const tiktokService = require('../services/tiktokService');
+const userService = require('../services/userService');
+const axios = require('axios');
+const crypto = require('crypto');
 
 // Get TikTok auth URL
 router.get('/auth', (req, res) => {
@@ -106,34 +109,101 @@ router.get('/callback', async (req, res) => {
 // POST /tiktok/post-video
 router.post('/post-video', async (req, res) => {
   try {
-    const { videoUrl, accessToken, refreshToken, caption } = req?.body || {};
-    if (!videoUrl || !accessToken) {
-      console.log('Missing required parameters:', {
-        hasVideoUrl: !!videoUrl,
-        hasAccessToken: !!accessToken
+    const { videoUrl, accessToken, refreshToken, caption, userId, accountId } = req?.body || {};
+    
+    // Check for either direct token access or userId+accountId lookup
+    if (!videoUrl) {
+      console.log('Missing required parameter:', {
+        hasVideoUrl: !!videoUrl
       });
-      return res.status(400).json({ error: 'Video URL and access token are required' });
+      return res.status(400).json({ error: 'Video URL is required' });
+    }
+
+    // If tokens provided directly, use them
+    let finalAccessToken = accessToken;
+    let finalRefreshToken = refreshToken;
+    
+    // If userId is provided but no accessToken, try to look up tokens from database
+    if (!finalAccessToken && userId) {
+      try {
+        console.log(`Looking up tokens for user ${userId} in the database`);
+        
+        // Import User model
+        const User = require('../models/User');
+        
+        // Fetch user from database
+        const user = await User.findOne({ uid: userId });
+        
+        if (!user || !user.providerData || !user.providerData.tiktok || !user.providerData.tiktok.length) {
+          console.error(`No TikTok accounts found for user ${userId} in database`);
+          return res.status(400).json({ error: 'No TikTok accounts found. Please connect a TikTok account.' });
+        }
+        
+        // If accountId is provided, find that specific account
+        let dbAccount;
+        if (accountId) {
+          dbAccount = user.providerData.tiktok.find(acc => acc.openId === accountId);
+          if (!dbAccount) {
+            console.error(`No matching TikTok account found for accountId ${accountId}`);
+            return res.status(404).json({ error: 'TikTok account not found. Please reconnect your account.' });
+          }
+        } else {
+          // Otherwise, use the first account
+          dbAccount = user.providerData.tiktok[0];
+        }
+        
+        if (!dbAccount.accessToken) {
+          console.error('TikTok account found but has no access token');
+          return res.status(401).json({ error: 'Invalid TikTok account. Please reconnect your account.' });
+        }
+        
+        console.log(`Using TikTok tokens from database for account ${dbAccount.username || dbAccount.openId}`);
+        finalAccessToken = dbAccount.accessToken;
+        finalRefreshToken = dbAccount.refreshToken;
+      } catch (lookupError) {
+        console.error('Error looking up TikTok tokens:', lookupError);
+        return res.status(500).json({ error: 'Failed to retrieve TikTok credentials: ' + lookupError.message });
+      }
+    }
+    
+    // Final check - we need an access token by this point
+    if (!finalAccessToken) {
+      console.log('Missing required parameters after database lookup:', {
+        hasVideoUrl: !!videoUrl,
+        hasAccessToken: !!finalAccessToken
+      });
+      return res.status(400).json({ error: 'TikTok access token is required' });
     }
 
     console.log('=== TIKTOK POST VIDEO ROUTE START ===');
     console.log('Posting video to TikTok with URL:', videoUrl);
 
     try {
-      const result = await tiktokService.postVideo(videoUrl, accessToken, caption, refreshToken);
+      const result = await tiktokService.postVideo(videoUrl, finalAccessToken, caption, finalRefreshToken);
       
       console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
       console.log('=== TIKTOK POST VIDEO ROUTE END ===');
       
-      res.status(200).json({ message: 'Video posted successfully', data: result });
-    } catch (postError) {
-      console.error('=== TIKTOK POST VIDEO ROUTE ERROR ===');
-      console.error('Error posting video:', postError?.message);
-      console.error('Error stack:', postError?.stack);
+      res.status(200).json({ message: 'Video posted successfully to TikTok', data: result });
+    } catch (error) {
+      console.error('TikTok API error:', error?.message);
       
-      // Send a properly formatted JSON response
-      return res.status(500).json({ 
-        error: 'Failed to post video to TikTok: ' + (postError?.message || 'Unknown error'),
-        errorCode: postError?.code || 'UNKNOWN_ERROR'
+      if (error.response) {
+        console.error('TikTok API error response:', error.response?.status, error.response?.statusText);
+        console.error('TikTok API error data:', error.response?.data);
+      }
+      
+      // Check if this is an authentication error
+      if (error?.message?.includes('auth') || error?.message?.includes('token')) {
+        return res.status(401).json({ 
+          error: 'TikTok authentication failed. Please reconnect your TikTok account and try again.',
+          code: 'TIKTOK_AUTH_ERROR'
+        });
+      }
+      
+      res.status(500).json({ 
+        error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error'),
+        code: error?.code || 'UNKNOWN_ERROR'
       });
     }
   } catch (error) {
@@ -141,18 +211,14 @@ router.post('/post-video', async (req, res) => {
     console.error('Error posting video:', error?.message);
     console.error('Error stack:', error?.stack);
     
-    // Send a properly formatted JSON response
-    res.status(500).json({ 
-      error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error'),
-      errorCode: error?.code || 'UNKNOWN_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to post video to TikTok: ' + (error?.message || 'Unknown error') });
   }
 });
 
 // POST /tiktok/post-video-multi
 router.post('/post-video-multi', async (req, res) => {
   try {
-    const { videoUrl, accounts, caption } = req?.body || {};
+    const { videoUrl, accounts, caption, userId } = req?.body || {};
     
     if (!videoUrl || !accounts || !Array.isArray(accounts) || accounts.length === 0) {
       console.log('Missing required parameters for multi-account posting:', {
@@ -169,12 +235,78 @@ router.post('/post-video-multi', async (req, res) => {
 
     const results = [];
     
+    // If userId is provided, we need to look up the actual tokens from database
+    let tokenizedAccounts = accounts;
+    
+    if (userId && accounts.some(account => account.accountId && !account.accessToken)) {
+      // We need to fetch tokens from the database
+      try {
+        console.log(`Looking up tokens for user ${userId} in the database`);
+        
+        // Import User model
+        const User = require('../models/User');
+        
+        // Fetch user from database
+        const user = await User.findOne({ uid: userId });
+        
+        if (!user || !user.providerData || !user.providerData.tiktok) {
+          console.error(`No TikTok accounts found for user ${userId} in database`);
+          throw new Error('No TikTok tokens found in database. Please reconnect your TikTok account.');
+        }
+        
+        console.log(`Found ${user.providerData.tiktok.length} TikTok accounts in database`);
+        
+        // Match requested account IDs with database tokens
+        tokenizedAccounts = accounts.map(account => {
+          // Find matching account in database
+          const dbAccount = user.providerData.tiktok.find(
+            dbAcc => dbAcc.openId === account.accountId
+          );
+          
+          if (!dbAccount || !dbAccount.accessToken) {
+            console.warn(`No matching database tokens found for account ${account.accountId}`);
+            return {
+              ...account,
+              foundInDb: false
+            };
+          }
+          
+          console.log(`Found database tokens for account ${account.accountId}`);
+          
+          // Return account with tokens from database
+          return {
+            accessToken: dbAccount.accessToken,
+            openId: dbAccount.openId,
+            refreshToken: dbAccount.refreshToken || '',
+            displayName: account.displayName || dbAccount.displayName || dbAccount.username || '',
+            username: account.username || dbAccount.username || '',
+            foundInDb: true
+          };
+        });
+        
+        // Filter out accounts without tokens
+        const validAccounts = tokenizedAccounts.filter(account => account.foundInDb && account.accessToken);
+        
+        if (validAccounts.length === 0) {
+          throw new Error('No valid TikTok accounts with tokens found');
+        }
+        
+        console.log(`Successfully retrieved tokens for ${validAccounts.length}/${accounts.length} accounts`);
+        
+        // Update tokenizedAccounts to only valid ones
+        tokenizedAccounts = validAccounts;
+      } catch (tokenError) {
+        console.error('Error retrieving tokens from database:', tokenError?.message);
+        throw new Error('Failed to retrieve TikTok tokens: ' + tokenError?.message);
+      }
+    }
+    
     // Process each account in sequence
-    for (let i = 0; i < accounts.length; i++) {
-      const account = accounts[i];
+    for (let i = 0; i < tokenizedAccounts.length; i++) {
+      const account = tokenizedAccounts[i];
       
       try {
-        console.log(`Processing TikTok account ${i+1}/${accounts.length}: ${account.displayName || account.openId}`);
+        console.log(`Processing TikTok account ${i+1}/${tokenizedAccounts.length}: ${account.displayName || account.openId}`);
         
         // Post to TikTok with this account
         const result = await tiktokService.postVideo(
@@ -192,7 +324,7 @@ router.post('/post-video-multi', async (req, res) => {
         });
         
         // Add a small delay between account requests to avoid rate limiting
-        if (i < accounts.length - 1) {
+        if (i < tokenizedAccounts.length - 1) {
           console.log(`Waiting 3 seconds before processing next TikTok account...`);
           await new Promise(resolve => setTimeout(resolve, 3000));
         }
@@ -214,7 +346,7 @@ router.post('/post-video-multi', async (req, res) => {
     // Return the combined results
     res.status(200).json({
       success: results.some(r => r.success), // Overall success if at least one account succeeded
-      message: `Posted to ${results.filter(r => r.success).length}/${accounts.length} TikTok accounts`,
+      message: `Posted to ${results.filter(r => r.success).length}/${tokenizedAccounts.length} TikTok accounts`,
       results: results
     });
   } catch (error) {

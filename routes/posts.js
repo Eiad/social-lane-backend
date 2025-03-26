@@ -250,7 +250,11 @@ router.post('/', async (req, res) => {
     
     // Handle Twitter accounts array
     if (twitter_accounts && Array.isArray(twitter_accounts) && twitter_accounts.length > 0) {
-      postData.twitter_accounts = twitter_accounts;
+      // Store only needed account info without tokens - tokens will be fetched from the database when processing the post
+      postData.twitter_accounts = twitter_accounts.map(account => ({
+        userId: account.userId,
+        username: account.username || ''
+      }));
     }
     
     // Set status based on whether it's scheduled

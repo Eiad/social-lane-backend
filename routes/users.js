@@ -59,10 +59,69 @@ router.get('/:uid', async (req, res) => {
       });
     }
 
-    // Return the complete user object
+    // Create a sanitized version of user data without Twitter tokens
+    let sanitizedUserData;
+    
+    if (user.toObject) {
+      sanitizedUserData = user.toObject();
+    } else {
+      sanitizedUserData = JSON.parse(JSON.stringify(user));
+    }
+    
+    // Remove Twitter tokens from response
+    if (sanitizedUserData.providerData && sanitizedUserData.providerData.twitter) {
+      if (Array.isArray(sanitizedUserData.providerData.twitter)) {
+        // Filter out sensitive data from each Twitter account
+        sanitizedUserData.providerData.twitter = sanitizedUserData.providerData.twitter.map(account => ({
+          userId: account.userId,
+          username: account.username,
+          name: account.name,
+          profileImageUrl: account.profileImageUrl
+        }));
+      } else {
+        // If it's a single account object, filter it
+        const twitterAccount = sanitizedUserData.providerData.twitter;
+        sanitizedUserData.providerData.twitter = {
+          userId: twitterAccount.userId,
+          username: twitterAccount.username,
+          name: twitterAccount.name,
+          profileImageUrl: twitterAccount.profileImageUrl
+        };
+      }
+    }
+    
+    // Sanitize TikTok data (remove sensitive tokens just like Twitter)
+    if (sanitizedUserData.providerData && sanitizedUserData.providerData.tiktok) {
+      if (Array.isArray(sanitizedUserData.providerData.tiktok)) {
+        // Filter out sensitive data from each TikTok account
+        sanitizedUserData.providerData.tiktok = sanitizedUserData.providerData.tiktok.map((account, index) => ({
+          accountId: account.openId,
+          openId: account.openId,
+          username: account.username || '',
+          displayName: account.displayName || '',
+          avatarUrl: account.avatarUrl || '',
+          avatarUrl100: account.avatarUrl100 || '',
+          index: account.index || (index + 1)
+        }));
+      } else {
+        // If it's a single account object, filter it
+        const tiktokAccount = sanitizedUserData.providerData.tiktok;
+        sanitizedUserData.providerData.tiktok = {
+          accountId: tiktokAccount.openId,
+          openId: tiktokAccount.openId,
+          username: tiktokAccount.username || '',
+          displayName: tiktokAccount.displayName || '',
+          avatarUrl: tiktokAccount.avatarUrl || '',
+          avatarUrl100: tiktokAccount.avatarUrl100 || '',
+          index: tiktokAccount.index || 1
+        };
+      }
+    }
+
+    // Return the sanitized user object
     res.status(200).json({
       success: true,
-      data: user
+      data: sanitizedUserData
     });
   } catch (error) {
     console.error('Error fetching user:', error);
@@ -1103,6 +1162,91 @@ router.post('/:userId/force-update', async (req, res) => {
   } catch (error) {
     console.error('[FORCE UPDATE] Error in direct update:', error);
     res.status(500).json({ error: 'Failed to update user: ' + error.message });
+  }
+});
+
+// Verify user's TikTok accounts
+router.post('/:uid/social/tiktok/verify', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    let accountIds = req.body;
+    
+    console.log(`[TIKTOK VERIFY] Received verification request for user ${uid}`, JSON.stringify({
+      dataType: typeof accountIds,
+      isArray: Array.isArray(accountIds),
+      dataLength: Array.isArray(accountIds) ? accountIds.length : 'not an array',
+      sampleKeys: accountIds ? Object.keys(accountIds).slice(0, 5) : []
+    }));
+    
+    // Ensure accountIds is an array for consistent processing
+    if (!Array.isArray(accountIds)) {
+      console.log('[TIKTOK VERIFY] Converting to array since input is not an array');
+      
+      // If accountIds has accountId, treat it as a single account
+      if (accountIds?.accountId) {
+        accountIds = [accountIds];
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid account ID format. Expected an array or a single account object.'
+        });
+      }
+    }
+    
+    // Validate that each item has the required fields
+    const validAccountIds = accountIds.filter(account => account?.accountId);
+    
+    if (validAccountIds.length === 0) {
+      console.log('[TIKTOK VERIFY] No valid TikTok account IDs found in data');
+      return res.status(400).json({
+        success: false,
+        error: 'No valid TikTok account IDs found. Each account requires accountId.'
+      });
+    }
+    
+    console.log(`[TIKTOK VERIFY] Verifying ${validAccountIds.length} TikTok accounts for user ${uid}`);
+    
+    // Get the user's TikTok accounts
+    const tiktokAccounts = await userService.getSocialMediaTokens(uid, 'tiktok');
+    
+    if (!tiktokAccounts || !Array.isArray(tiktokAccounts) || tiktokAccounts.length === 0) {
+      console.log('[TIKTOK VERIFY] No TikTok accounts found for user');
+      return res.status(404).json({
+        success: false,
+        error: 'No TikTok accounts found for user'
+      });
+    }
+    
+    console.log(`[TIKTOK VERIFY] User has ${tiktokAccounts.length} TikTok accounts in database`);
+    
+    // Verify each account ID exists in user's accounts
+    const verificationResults = validAccountIds.map(accountToVerify => {
+      const foundAccount = tiktokAccounts.find(dbAccount => 
+        dbAccount.openId === accountToVerify.accountId
+      );
+      
+      return {
+        accountId: accountToVerify.accountId,
+        exists: !!foundAccount,
+        status: foundAccount ? 'verified' : 'not_found'
+      };
+    });
+    
+    console.log(`[TIKTOK VERIFY] Verification results:`, verificationResults.map(r => `${r.accountId}: ${r.status}`).join(', '));
+    
+    const verifiedCount = verificationResults.filter(r => r.exists).length;
+    
+    res.status(200).json({
+      success: true,
+      message: `Verified ${verifiedCount} out of ${validAccountIds.length} accounts`,
+      results: verificationResults
+    });
+  } catch (error) {
+    console.error('Error verifying TikTok accounts:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
   }
 });
 

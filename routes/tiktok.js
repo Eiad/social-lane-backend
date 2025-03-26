@@ -62,14 +62,6 @@ router.get('/callback', async (req, res) => {
       console.log('Attempting to fetch TikTok user info with received token');
       const userInfo = await tiktokService.getUserInfo(tokenData.access_token, tokenData.refresh_token);
       
-      // Add user info to the redirect URL
-      const userInfoParams = userInfo ? {
-        username: userInfo.username || '',
-        display_name: userInfo.display_name || '',
-        avatar_url: userInfo.avatar_url || '',
-        avatar_url_100: userInfo.avatar_url_100 || ''
-      } : {};
-      
       console.log('User info retrieved successfully:', {
         hasUsername: !!userInfo?.username,
         hasDisplayName: !!userInfo?.display_name,
@@ -82,12 +74,8 @@ router.get('/callback', async (req, res) => {
         access_token: tokenData.access_token,
         open_id: tokenData.open_id,
         ...(tokenData.refresh_token ? { refresh_token: tokenData.refresh_token } : {}),
-        ...(userInfoParams ? {
-          username: userInfoParams.username,
-          display_name: userInfoParams.display_name,
-          avatar_url: userInfoParams.avatar_url,
-          avatar_url_100: userInfoParams.avatar_url_100
-        } : {})
+        // Send user info as a single JSON string parameter
+        user_info: JSON.stringify(userInfo || {})
       });
       
       const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?${redirectParams.toString()}`;

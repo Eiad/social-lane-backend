@@ -30,9 +30,9 @@ console.log('Environment:');
 console.log('- PORT:', port);
 console.log('- BACKEND_URL:', process.env.BACKEND_URL);
 console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
-console.log('- R2_BUCKET_NAME:', process.env.R2_BUCKET_NAME);
+console.log('- R2_VIDEOS_BUCKET_NAME:', process.env.R2_VIDEOS_BUCKET_NAME);
 console.log('- R2_ENDPOINT:', process.env.R2_ENDPOINT);
-console.log('- R2_MEDIA_PUBLIC_DOMAIN:', process.env.R2_MEDIA_PUBLIC_DOMAIN);
+console.log('- R2_VIDEOS_PUBLIC_DOMAIN:', process.env.R2_VIDEOS_PUBLIC_DOMAIN);
 
 // Enable CORS for frontend with proper configuration
 const allowedOrigins = [
@@ -354,7 +354,7 @@ app.get('/', (req, res) => {
     environment: {
       backend_url: process.env.BACKEND_URL,
       frontend_url: process.env.FRONTEND_URL,
-      R2_MEDIA_PUBLIC_DOMAIN: process.env.R2_MEDIA_PUBLIC_DOMAIN
+      R2_VIDEOS_PUBLIC_DOMAIN: process.env.R2_VIDEOS_PUBLIC_DOMAIN
     }
   });
 });
@@ -363,5 +363,5 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`Backend URL: ${process.env.BACKEND_URL}`);
   console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`R2 Public Domain: ${process.env.R2_MEDIA_PUBLIC_DOMAIN}`);
+  console.log(`R2 Public Domain: ${process.env.R2_VIDEOS_PUBLIC_DOMAIN}`);
 });

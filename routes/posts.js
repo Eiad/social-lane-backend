@@ -226,15 +226,15 @@ router.post('/', async (req, res) => {
     if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
       // Make sure the TikTok accounts have the right schema format
       postData.tiktok_accounts = tiktok_accounts.map(account => ({
-        accessToken: account.accessToken,
-        refreshToken: account.refreshToken || null,
-        openId: account.openId
+        accessToken: account?.accessToken,
+        refreshToken: account?.refreshToken || null,
+        openId: account?.openId
       }));
       console.log('Formatted TikTok accounts for database:', 
         postData.tiktok_accounts.map(acc => ({
-          openId: acc.openId,
-          hasAccessToken: !!acc.accessToken,
-          hasRefreshToken: !!acc.refreshToken
+          openId: acc?.openId,
+          hasAccessToken: !!acc?.accessToken,
+          hasRefreshToken: !!acc?.refreshToken
         }))
       );
     } else if (tiktok_access_token) {
@@ -252,8 +252,8 @@ router.post('/', async (req, res) => {
     if (twitter_accounts && Array.isArray(twitter_accounts) && twitter_accounts.length > 0) {
       // Store only needed account info without tokens - tokens will be fetched from the database when processing the post
       postData.twitter_accounts = twitter_accounts.map(account => ({
-        userId: account.userId,
-        username: account.username || ''
+        userId: account?.userId,
+        username: account?.username || ''
       }));
     }
     

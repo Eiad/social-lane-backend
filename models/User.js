@@ -95,4 +95,4 @@ const UserSchema = new mongoose.Schema({
 // Create only necessary indexes (removed duplicates)
 UserSchema.index({ role: 1 });
 
-module.exports = mongoose.model('User', UserSchema); 
+module.exports = mongoose.model('User', UserSchema, 'customers'); 

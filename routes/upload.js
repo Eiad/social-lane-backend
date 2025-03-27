@@ -87,9 +87,9 @@ router.post('/', async (req, res) => {
         try {
           fs.unlinkSync(tempFilePath);
         } catch (e) {
-          console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e);
+          console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e?.message);
         }
-        return res.status(500).json({ error: 'Error uploading file', details: error.message });
+        return res.status(500).json({ error: 'Error uploading file', details: error?.message });
       }
       
       console.log('[UPLOAD ROUTE] File received successfully, size:', fs.statSync(tempFilePath).size);
@@ -136,7 +136,7 @@ router.post('/', async (req, res) => {
         try {
           fs.unlinkSync(tempFilePath);
         } catch (e) {
-          console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e);
+          console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e?.message);
         }
         
         res.status(500).json({ error: 'Error uploading file to R2', details: uploadError?.message });

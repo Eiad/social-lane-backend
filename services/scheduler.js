@@ -42,9 +42,9 @@ const initScheduler = () => {
             if (post.tiktok_accounts) {
               console.log('TikTok accounts found in post:', 
                 post.tiktok_accounts.map(acc => ({
-                  openId: acc.openId,
-                  hasAccessToken: !!acc.accessToken,
-                  hasRefreshToken: !!acc.refreshToken
+                  openId: acc?.openId,
+                  hasAccessToken: !!acc?.accessToken,
+                  hasRefreshToken: !!acc?.refreshToken
                 }))
               );
             }
@@ -238,44 +238,44 @@ const processPost = async (post) => {
           for (let i = 0; i < updatedTiktokAccounts.length; i++) {
             const account = updatedTiktokAccounts[i];
             console.log(`TikTok account ${i + 1}:`, {
-              openId: account.openId,
-              hasAccessToken: !!account.accessToken,
-              hasRefreshToken: !!account.refreshToken
+              openId: account?.openId,
+              hasAccessToken: !!account?.accessToken,
+              hasRefreshToken: !!account?.refreshToken
             });
             
             try {
-              console.log(`Posting to TikTok account with ID ${account.openId}`);
+              console.log(`Posting to TikTok account with ID ${account?.openId}`);
               const accountResult = await postToTikTok(
                 video_url, 
                 post_description, 
-                account.accessToken, 
-                account.refreshToken
+                account?.accessToken, 
+                account?.refreshToken
               );
               
               accountResults.push({ 
                 success: true, 
-                accountId: account.openId,
+                accountId: account?.openId,
                 ...accountResult 
               });
               
-              console.log(`TikTok posting completed successfully for account ${account.openId}`);
+              console.log(`TikTok posting completed successfully for account ${account?.openId}`);
               
               // Add a 5-second delay between accounts if not the last account
               if (i < updatedTiktokAccounts.length - 1) {
-                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1].openId})`);
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1]?.openId})`);
                 await new Promise(resolve => setTimeout(resolve, 5000));
               }
             } catch (accountError) {
-              console.error(`Error posting to TikTok account ${account.openId}:`, accountError?.message);
+              console.error(`Error posting to TikTok account ${account?.openId}:`, accountError?.message);
               accountResults.push({ 
                 success: false, 
-                accountId: account.openId,
+                accountId: account?.openId,
                 error: accountError?.message 
               });
               
               // Still add delay even if posting failed
               if (i < updatedTiktokAccounts.length - 1) {
-                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1].openId})`);
+                console.log(`Waiting 5 seconds for next social media account post (TikTok account: ${updatedTiktokAccounts[i+1]?.openId})`);
                 await new Promise(resolve => setTimeout(resolve, 5000));
               }
             }
@@ -320,7 +320,7 @@ const processPost = async (post) => {
         // Process each Twitter account
         for (const account of updatedTwitterAccounts) {
           try {
-            const { accessToken, accessTokenSecret, refreshToken, userId, username } = account;
+            const { accessToken, accessTokenSecret, refreshToken, userId, username } = account || {};
             
             if (!accessToken || !accessTokenSecret) {
               console.warn(`Skipping Twitter account ${userId || 'unknown'} due to missing tokens`);

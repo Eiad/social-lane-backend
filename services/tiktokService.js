@@ -70,11 +70,59 @@ async function getAccessToken(code) {
   }
 }
 
+// Refresh an expired TikTok access token using refresh token
+async function refreshTikTokToken(refreshToken) {
+  try {
+    console.log('Attempting to refresh TikTok access token');
+    
+    if (!refreshToken) {
+      throw new Error('No refresh token provided');
+    }
+    
+    const params = new URLSearchParams();
+    params.append('client_key', TIKTOK_API_KEY);
+    params.append('client_secret', TIKTOK_CLIENT_SECRET);
+    params.append('grant_type', 'refresh_token');
+    params.append('refresh_token', refreshToken);
+    
+    console.log('Token refresh params:', params.toString().replace(refreshToken, '[REDACTED]'));
+    
+    const response = await axios.post(TIKTOK_ACCESS_TOKEN_URL, params.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 30000 // 30 second timeout
+    });
+    
+    console.log('Token refresh response:', JSON.stringify({
+      ...response?.data,
+      access_token: response?.data?.access_token ? '[REDACTED]' : undefined,
+      refresh_token: response?.data?.refresh_token ? '[REDACTED]' : undefined
+    }));
+    
+    if (!response?.data?.access_token) {
+      throw new Error('No access token in refresh response');
+    }
+    
+    return {
+      accessToken: response.data.access_token,
+      refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided
+      openId: response.data.open_id,
+      scope: response.data.scope,
+      expiresIn: response.data.expires_in
+    };
+  } catch (error) {
+    console.error('Error refreshing TikTok token:', error?.response?.data || error?.message);
+    throw new Error('Failed to refresh TikTok access token: ' + (error?.response?.data?.error?.message || error?.message));
+  }
+}
+
 // Post video to TikTok with support for multiple accounts
 async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '') {
   try {
     // Check if we need to refresh the token
     let tokenToUse = accessToken;
+    let attemptedRefresh = false;
     
     // First, download the video
     console.log('Attempting to download video from URL...');
@@ -158,26 +206,30 @@ async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '')
       }
     };
 
-    let initResponse;
-    try {
+    async function attemptUploadWithToken(token, rToken) {
       console.log('Initializing video upload with TikTok API...');
-      console.log('Using access token:', !!tokenToUse);
-      console.log('Using refresh token:', !!refreshToken);
+      console.log('Using access token:', !!token);
+      console.log('Using refresh token:', !!rToken);
       
       const headers = {
-        'Authorization': `Bearer ${tokenToUse}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       };
       
-      if (refreshToken) {
-        headers['X-Refresh-Token'] = refreshToken;
+      if (rToken) {
+        headers['X-Refresh-Token'] = rToken;
       }
       
-      initResponse = await axios.post(TIKTOK_VIDEO_UPLOAD_URL, initRequest, {
+      return await axios.post(TIKTOK_VIDEO_UPLOAD_URL, initRequest, {
         headers,
-        timeout: 30000
+        timeout: 60000
       });
+    }
+
+    let initResponse;
+    try {
+      initResponse = await attemptUploadWithToken(tokenToUse, refreshToken);
       
       // Safely log and parse the response
       try {
@@ -190,25 +242,66 @@ async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '')
         console.error('Error logging response:', logError?.message);
       }
     } catch (initError) {
-      // Check if the response is HTML or other non-JSON format
-      if (initError?.response?.headers?.['content-type']?.includes('text/html')) {
-        console.error('=== TikTok returned HTML instead of JSON ===');
-        const htmlResponse = initError?.response?.data?.toString().substring(0, 500);
-        console.error('HTML Response (first 500 chars):', htmlResponse);
-        throw new Error('TikTok API returned HTML instead of JSON. Please check your TikTok credentials or try again later.');
-      }
+      // Check if this is an expired token error and we have a refresh token
+      const isExpiredTokenError = 
+        initError?.response?.data?.error?.code === 'access_token_has_expired' || 
+        (initError?.message && initError?.message.includes('expired')) ||
+        (initError?.response?.data?.error?.message && 
+         initError?.response?.data?.error?.message.includes('invalid'));
       
-      // Try to safely handle the error response
-      try {
-        handleTikTokError(initError);
-      } catch (handleError) {
-        console.error('Error handling TikTok API error:', handleError?.message);
-        throw new Error('Failed to process TikTok API error: ' + (handleError?.message || initError?.message));
+      if (isExpiredTokenError && refreshToken && !attemptedRefresh) {
+        console.log('Access token expired or invalid. Attempting to refresh token...');
+        try {
+          // Try to refresh the token
+          const newTokens = await refreshTikTokToken(refreshToken);
+          attemptedRefresh = true;
+          
+          console.log('Successfully refreshed tokens. Retrying upload with new token...');
+          // Retry the upload with new token
+          initResponse = await attemptUploadWithToken(newTokens.accessToken, newTokens.refreshToken);
+          
+          // If successful, update the token to use
+          tokenToUse = newTokens.accessToken;
+          refreshToken = newTokens.refreshToken;
+          
+          // Log success
+          console.log('Upload successful with refreshed token');
+        } catch (refreshError) {
+          console.error('Failed to refresh token:', refreshError?.message);
+          // Continue with the original error handling
+          handleTikTokError(initError);
+        }
+      } else {
+        // For non-token errors or if refresh failed, continue with error handling
+        // Check if the response is HTML or other non-JSON format
+        if (initError?.response?.headers?.['content-type']?.includes('text/html')) {
+          console.error('=== TikTok returned HTML instead of JSON ===');
+          const htmlResponse = initError?.response?.data?.toString().substring(0, 500);
+          console.error('HTML Response (first 500 chars):', htmlResponse);
+          throw new Error('TikTok API returned HTML instead of JSON. Please check your TikTok credentials or try again later.');
+        }
+        
+        // Try to safely handle the error response
+        try {
+          handleTikTokError(initError);
+        } catch (handleError) {
+          console.error('Error handling TikTok API error:', handleError?.message);
+          throw new Error('Failed to process TikTok API error: ' + (handleError?.message || initError?.message));
+        }
       }
     }
     
     if (initResponse?.data?.data?.publish_id) {
-      return await handleVideoUploadStatus(initResponse.data.data.publish_id, tokenToUse, refreshToken);
+      const result = await handleVideoUploadStatus(initResponse.data.data.publish_id, tokenToUse, refreshToken);
+      
+      // If we refreshed tokens during this operation, include that info in the result
+      if (attemptedRefresh) {
+        result.tokensRefreshed = true;
+        result.newAccessToken = tokenToUse;
+        result.newRefreshToken = refreshToken;
+      }
+      
+      return result;
     } else if (initResponse?.data?.error) {
       try {
         handleTikTokError(new Error(initResponse.data.error.message || initResponse.data.error.code));
@@ -228,7 +321,7 @@ async function postVideo(videoUrl, accessToken, caption = '', refreshToken = '')
   }
 }
 
-// Helper function to handle TikTok API errors
+// Replace the existing handleTikTokError function with an improved version that better handles token errors
 function handleTikTokError(error) {
   console.error('=== TIKTOK API ERROR ===');
   console.error('Error:', error?.message);
@@ -237,15 +330,27 @@ function handleTikTokError(error) {
     const errorCode = error.response.data.error.code;
     const errorMessage = error.response.data.error.message;
     
+    console.log('TikTok API error code:', errorCode);
+    console.log('TikTok API error message:', errorMessage);
+    
+    // Handle specific known error cases
     if (errorCode === 'unaudited_client_can_only_post_to_private_accounts') {
       throw new Error('Your API client is unaudited. Videos can only be posted with private visibility.');
     } else if (errorCode === 'invalid_params' && errorMessage?.includes('source info')) {
       throw new Error('Invalid source_info parameter. Please check the video URL format and ensure it is publicly accessible.');
-    } else if (errorCode === 'access_token_has_expired') {
+    } else if (errorCode === 'access_token_has_expired' || errorCode === 'token_has_expired') {
       throw new Error('Your TikTok access token has expired. Please reconnect your TikTok account.');
+    } else if (errorCode === 'invalid_access_token' || errorCode?.includes('invalid_token') || errorMessage?.includes('invalid token')) {
+      throw new Error('TikTok API error: The access token is invalid or not found in the request.');
+    } else if (errorCode === 'invalid_refresh_token' || errorMessage?.includes('refresh token')) {
+      throw new Error('TikTok API error: The refresh token is invalid. Please reconnect your TikTok account.');
     } else {
       throw new Error(`TikTok API error: ${errorMessage || errorCode}`);
     }
+  } else if (error?.message?.includes('access token has expired') || 
+             error?.message?.includes('token expired') ||
+             error?.message?.toLowerCase().includes('invalid token')) {
+    throw new Error('TikTok API error: The access token is invalid or not found in the request.');
   }
   
   throw error;
@@ -277,7 +382,7 @@ async function handleVideoUploadStatus(publishId, accessToken, refreshToken) {
         publish_id: publishId
       }, {
         headers,
-        timeout: 15000
+        timeout: 30000
       });
       
       console.log(`Status check attempt ${attempts}:`, JSON.stringify(statusResponse?.data, null, 2));
@@ -510,4 +615,4 @@ async function getUserInfo(accessToken, refreshToken = '') {
   }
 }
 
-module.exports = { getAuthUrl, getAccessToken, postVideo, getUserInfo };
+module.exports = { getAuthUrl, getAccessToken, refreshTikTokToken, postVideo, getUserInfo };

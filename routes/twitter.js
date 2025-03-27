@@ -256,6 +256,17 @@ router.post('/post-video-multi', async (req, res) => {
   try {
     const { videoUrl, accounts, text, userId } = req?.body || {};
     
+    console.log('Twitter post-video-multi request:', {
+      hasVideoUrl: !!videoUrl,
+      accountsCount: accounts?.length || 0,
+      hasText: !!text,
+      userId: userId || 'not provided',
+      accountDetails: accounts?.map(acc => ({
+        userId: acc.userId,
+        username: acc.username || 'no username'
+      }))
+    });
+    
     if (!videoUrl || !accounts || !Array.isArray(accounts) || accounts.length === 0) {
       console.log('Missing required parameters for multi-account posting:', {
         hasVideoUrl: !!videoUrl,
@@ -288,6 +299,14 @@ router.post('/post-video-multi', async (req, res) => {
       
       twitterAccounts = Array.isArray(userTwitterData) ? userTwitterData : [userTwitterData];
       console.log(`Found ${twitterAccounts.length} Twitter account(s) in the database for user ${userId}`);
+      
+      // Log the accounts we found in the database for debugging
+      console.log('Available Twitter accounts in database:', twitterAccounts.map(acc => ({
+        userId: acc.userId || acc.user_id,
+        username: acc.username || acc.screenName || 'no username',
+        hasAccessToken: !!acc.accessToken,
+        hasAccessTokenSecret: !!acc.accessTokenSecret
+      })));
     } catch (error) {
       console.error(`Error fetching Twitter tokens for user ${userId}:`, error);
       return res.status(500).json({ error: 'Failed to fetch Twitter tokens from the database' });
@@ -302,11 +321,15 @@ router.post('/post-video-multi', async (req, res) => {
       try {
         console.log(`Processing Twitter account ${i+1}/${accounts.length}: ${account.username || account.userId}`);
         
-        // Find the matching account in the database
-        const dbAccount = twitterAccounts.find(acc => acc.userId === account.userId);
+        // Try to find the matching account in the database using different possible ID field names
+        const dbAccount = twitterAccounts.find(acc => 
+          (acc.userId && acc.userId === account.userId) || 
+          (acc.user_id && acc.user_id === account.userId)
+        );
         
         if (!dbAccount) {
           console.error(`No database entry found for Twitter account: ${account.username || account.userId}`);
+          console.error('Account lookup failed. Requested:', account, 'Available accounts:', twitterAccounts.map(a => a.userId || a.user_id));
           results.push({
             accountId: account.userId,
             username: account.username || '',

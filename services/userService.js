@@ -250,7 +250,7 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
         console.log(`[USER SERVICE] Performing direct MongoDB update for TikTok accounts for user ${user._id}`);
         const mongoose = require('mongoose');
         const db = mongoose.connection.db;
-        const usersCollection = db.collection('users');
+        const usersCollection = db.collection('customers');
         
         const updateResult = await usersCollection.updateOne(
           { _id: user._id },
@@ -337,31 +337,31 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
       
       // 1. First try direct MongoDB update for reliability
       try {
-        console.log(`[USER SERVICE] Performing direct MongoDB update for user ${user._id}`);
+        console.log(`[USER SERVICE] Performing direct MongoDB update for Twitter accounts for user ${user._id}`);
         const mongoose = require('mongoose');
         const db = mongoose.connection.db;
-        const usersCollection = db.collection('users');
+        const usersCollection = db.collection('customers');
         
         const updateResult = await usersCollection.updateOne(
           { _id: user._id },
           { $set: { 'providerData.twitter': user.providerData.twitter, lastLogin: new Date() } }
         );
         
-        console.log('[USER SERVICE] Direct update result:', {
+        console.log('[USER SERVICE] Direct Twitter update result:', {
           acknowledged: updateResult.acknowledged,
           modifiedCount: updateResult.modifiedCount,
           matchedCount: updateResult.matchedCount
         });
         
         if (updateResult.acknowledged && updateResult.modifiedCount > 0) {
-          console.log('[USER SERVICE] Direct MongoDB update successful');
+          console.log('[USER SERVICE] Direct MongoDB update for Twitter successful');
           
           // Get the updated user with a fresh query to verify
           const updatedUser = await User.findById(user._id);
           return updatedUser;
         }
       } catch (directUpdateError) {
-        console.error('[USER SERVICE] Error with direct MongoDB update:', directUpdateError);
+        console.error('[USER SERVICE] Error with direct MongoDB update for Twitter:', directUpdateError);
         // Continue to save() method
       }
     } else {
@@ -595,6 +595,54 @@ const createUser = async (userData) => {
   }
 };
 
+// Add a new function to update TikTok tokens after they've been refreshed
+async function updateTikTokTokens(uid, openId, newAccessToken, newRefreshToken) {
+  try {
+    console.log(`Updating TikTok tokens for user ${uid} account ${openId}`);
+    
+    // Find the user by uid
+    const User = require('../models/User');
+    const user = await User.findOne({ uid });
+    
+    if (!user) {
+      console.error(`User not found with uid: ${uid}`);
+      throw new Error('User not found');
+    }
+    
+    // Find the specific TikTok account to update
+    if (!user.providerData || !user.providerData.tiktok || !Array.isArray(user.providerData.tiktok)) {
+      console.error(`User ${uid} has no TikTok accounts`);
+      throw new Error('User has no TikTok accounts');
+    }
+    
+    const accountIndex = user.providerData.tiktok.findIndex(account => account.openId === openId);
+    
+    if (accountIndex === -1) {
+      console.error(`TikTok account ${openId} not found for user ${uid}`);
+      throw new Error('TikTok account not found');
+    }
+    
+    // Update the tokens
+    user.providerData.tiktok[accountIndex].accessToken = newAccessToken;
+    
+    if (newRefreshToken) {
+      user.providerData.tiktok[accountIndex].refreshToken = newRefreshToken;
+    }
+    
+    // Add a timestamp for when tokens were last updated
+    user.providerData.tiktok[accountIndex].tokensUpdatedAt = new Date();
+    
+    // Save the user
+    await user.save();
+    
+    console.log(`Successfully updated TikTok tokens for user ${uid} account ${openId}`);
+    return true;
+  } catch (error) {
+    console.error(`Error updating TikTok tokens: ${error.message}`);
+    throw error;
+  }
+}
+
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
@@ -605,5 +653,6 @@ module.exports = {
   removeSocialMediaConnection,
   removeTikTokAccount,
   removeTwitterAccount,
-  createUser
+  createUser,
+  updateTikTokTokens
 }; 

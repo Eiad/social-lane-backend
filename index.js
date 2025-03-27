@@ -87,8 +87,8 @@ app.options('*', (req, res) => {
 
 // Add timeout middleware
 app.use((req, res, next) => {
-  // Set a timeout for all requests (2 minutes)
-  req.setTimeout(120000, () => {
+  // Set a timeout for all requests (5 minutes)
+  req.setTimeout(300000, () => {
     console.error('Request timeout exceeded');
     if (!res.headersSent) {
       res.status(408).json({ error: 'Request timeout exceeded' });
@@ -100,9 +100,48 @@ app.use((req, res, next) => {
 // Raw body parser middleware for PayPal webhooks
 app.use(rawBodyParser);
 
-// Parse JSON bodies
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Special handling for upload route - bypass body parser and use streaming
+app.use((req, res, next) => {
+  // Skip body parsing for upload routes and use direct streaming instead
+  if (req.url === '/upload' && req.method === 'POST') {
+    // For uploads, we'll handle parsing in the upload route
+    console.log('Bypassing body parser for file upload request');
+    return next();
+  }
+  
+  // Continue with standard middleware for other routes
+  return next();
+});
+
+// Parse JSON bodies - increased limits for larger payloads
+app.use(express.json({ 
+  limit: '100mb',
+  verify: (req, res, buf, encoding) => {
+    // Store raw body for webhook verification
+    if (buf && buf.length) {
+      req.rawBody = buf.toString(encoding || 'utf8');
+    }
+  }
+}));
+
+// Parse URL-encoded bodies - increased limits for larger payloads
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '100mb'
+}));
+
+// Handle 413 Payload Too Large errors
+app.use((err, req, res, next) => {
+  if (err && err.status === 413) {
+    console.error('Request entity too large:', err.message);
+    return res.status(413).json({ 
+      error: 'Payload too large',
+      details: 'The file you are trying to upload is too large. Please use a smaller file or try our streaming upload API.',
+      code: 'PAYLOAD_TOO_LARGE'
+    });
+  }
+  next(err);
+});
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -271,6 +310,7 @@ app.post('/social/tiktok/post', async (req, res) => {
 
 // Add a route handler for social/twitter/post that forwards to the Twitter post-video endpoint
 app.post('/social/twitter/post', async (req, res) => {
+  console.log('=== SOCIAL/TWITTER/POST ROUTE START ===');
   console.log('Forwarding request from /social/twitter/post to Twitter endpoints');
   
   // Log the incoming payload structure
@@ -279,15 +319,42 @@ app.post('/social/twitter/post', async (req, res) => {
     hasVideoUrl: !!req.body?.videoUrl,
     hasAccounts: Array.isArray(req.body?.accounts) && req.body?.accounts.length > 0,
     hasText: !!req.body?.text,
-    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0
+    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0,
+    userId: req.body?.userId ? req.body.userId.substring(0, 5) + '...' : 'missing'
   });
+  
+  if (!req.body) {
+    console.error('Request body is empty or missing');
+    return res.status(400).json({ 
+      error: 'Missing request body',
+      details: 'The request body is required but was not provided'
+    });
+  }
+  
+  // Log more detailed account information for debugging
+  if (req.body?.accounts && Array.isArray(req.body.accounts)) {
+    console.log('Account details:', req.body.accounts.map(acc => ({
+      userId: acc.userId || 'missing',
+      username: acc.username || 'no username'
+    })));
+  }
   
   // Handle multiple accounts case with our new endpoint
   if (req.body?.accounts && Array.isArray(req.body.accounts) && req.body.accounts.length > 0) {
     console.log(`Using Twitter multi-account endpoint for ${req.body.accounts.length} accounts`);
     
+    // Make sure we have userId
+    if (!req.body.userId) {
+      console.error('Missing required parameter: userId');
+      return res.status(400).json({ 
+        error: 'Missing required parameter: userId', 
+        details: 'The userId is required to fetch account tokens from the database'
+      });
+    }
+    
     try {
       // Forward to the multi-account endpoint
+      console.log('Forwarding request to /twitter/post-video-multi endpoint');
       const response = await axios({
         method: 'POST',
         url: `${process.env.BACKEND_URL}/twitter/post-video-multi`,
@@ -303,9 +370,26 @@ app.post('/social/twitter/post', async (req, res) => {
       });
       
       // Return the response from the multi-account endpoint
+      console.log('Twitter multi-account post response:', {
+        status: response.status,
+        success: response.data?.success,
+        message: response.data?.message,
+        resultCount: response.data?.results?.length || 0
+      });
+      
+      console.log('=== SOCIAL/TWITTER/POST ROUTE END ===');
       return res.status(response.status).json(response.data);
     } catch (error) {
+      console.error('=== SOCIAL/TWITTER/POST ROUTE ERROR ===');
       console.error('Error forwarding to Twitter multi-account endpoint:', error?.message);
+      
+      // Log detailed error information
+      console.error('Error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+        code: error.code
+      });
       
       // Return appropriate error response
       const status = error.response?.status || 500;
@@ -316,7 +400,7 @@ app.post('/social/twitter/post', async (req, res) => {
         details: errorMessage 
       });
     }
-  } 
+  }
   // Handle single account case
   else if (req.body?.accessToken && req.body?.accessTokenSecret) {
     console.log('Using Twitter single account endpoint');
@@ -329,7 +413,24 @@ app.post('/social/twitter/post', async (req, res) => {
     };
     
     // Forward to the single account endpoint
+    console.log('Forwarding to /twitter/post-video endpoint with single account');
     req.body = singleAccountPayload;
+    req.url = '/post-video';
+    twitterRoutes(req, res);
+  }
+  // Handle userId-only case (lookup tokens from database)
+  else if (req.body?.userId && req.body?.videoUrl) {
+    console.log(`Using Twitter single account endpoint with database token lookup for user: ${req.body.userId.substring(0, 5)}...`);
+    
+    const lookupPayload = {
+      videoUrl: req.body.videoUrl || '',
+      text: req.body.text || req.body.caption || '',
+      userId: req.body.userId
+    };
+    
+    // Forward to the post-video endpoint which will look up tokens
+    console.log('Forwarding to /twitter/post-video endpoint with userId for token lookup');
+    req.body = lookupPayload;
     req.url = '/post-video';
     twitterRoutes(req, res);
   }
@@ -338,7 +439,7 @@ app.post('/social/twitter/post', async (req, res) => {
     console.error('Missing required parameters for Twitter posting');
     return res.status(400).json({ 
       error: 'Missing required parameters',
-      details: 'Either accounts array or accessToken with accessTokenSecret must be provided'
+      details: 'Either accounts array or accessToken with accessTokenSecret or userId must be provided'
     });
   }
 });

@@ -33,7 +33,7 @@ router.get('/callback', async (req, res) => {
     // Handle error from TikTok
     if (error) {
       console.error('TikTok auth error:', error, error_description);
-      return res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent(error_description || 'Authentication failed')}`);
+      return res.redirect(`${process.env.FRONTEND_URL}/tiktok?connection_error=${encodeURIComponent(error_description || 'Authentication failed')}`);
     }
     
     if (!code) {
@@ -46,7 +46,7 @@ router.get('/callback', async (req, res) => {
     
     if (!tokenData || tokenData.error) {
       console.error('Token exchange failed:', tokenData?.error || 'Unknown error');
-      return res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent(tokenData?.error_description || 'Token exchange failed')}`);
+      return res.redirect(`${process.env.FRONTEND_URL}/tiktok?connection_error=${encodeURIComponent(tokenData?.error_description || 'Token exchange failed')}`);
     }
     
     // Check if user.info.basic scope was granted
@@ -73,12 +73,11 @@ router.get('/callback', async (req, res) => {
       const redirectParams = new URLSearchParams({
         access_token: tokenData.access_token,
         open_id: tokenData.open_id,
-        ...(tokenData.refresh_token ? { refresh_token: tokenData.refresh_token } : {}),
-        // Send user info as a single JSON string parameter
-        user_info: JSON.stringify(userInfo || {})
+        refresh_token: tokenData.refresh_token || '',
+        ...(userInfo ? { user_info: encodeURIComponent(JSON.stringify(userInfo)) } : {})
       });
       
-      const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?${redirectParams.toString()}`;
+      const redirectUrl = `${process.env.FRONTEND_URL}/tiktok?${redirectParams.toString()}&auth_success=true`;
       res.redirect(redirectUrl);
     } catch (userInfoError) {
       console.error('Error fetching user info after token exchange:', userInfoError);
@@ -90,7 +89,7 @@ router.get('/callback', async (req, res) => {
     }
   } catch (error) {
     console.error('Auth callback error:', error?.message);
-    res.redirect(`${process.env.FRONTEND_URL}/tiktok?error=${encodeURIComponent('Authentication failed: ' + (error?.message || 'Unknown error'))}`);
+    res.redirect(`${process.env.FRONTEND_URL}/tiktok?connection_error=${encodeURIComponent('Authentication failed: ' + (error?.message || 'Unknown error'))}`);
   }
 });
 
@@ -110,6 +109,8 @@ router.post('/post-video', async (req, res) => {
     // If tokens provided directly, use them
     let finalAccessToken = accessToken;
     let finalRefreshToken = refreshToken;
+    let finalUserId = userId;
+    let finalAccountId = accountId;
     
     // If userId is provided but no accessToken, try to look up tokens from database
     if (!finalAccessToken && userId) {
@@ -148,6 +149,7 @@ router.post('/post-video', async (req, res) => {
         console.log(`Using TikTok tokens from database for account ${dbAccount.username || dbAccount.openId}`);
         finalAccessToken = dbAccount.accessToken;
         finalRefreshToken = dbAccount.refreshToken;
+        finalAccountId = dbAccount.openId;
       } catch (lookupError) {
         console.error('Error looking up TikTok tokens:', lookupError);
         return res.status(500).json({ error: 'Failed to retrieve TikTok credentials: ' + lookupError.message });
@@ -169,6 +171,23 @@ router.post('/post-video', async (req, res) => {
     try {
       const result = await tiktokService.postVideo(videoUrl, finalAccessToken, caption, finalRefreshToken);
       
+      // If tokens were refreshed during the posting process, update the user's record
+      if (result.tokensRefreshed && finalUserId && finalAccountId) {
+        try {
+          console.log('Tokens were refreshed during posting, updating user record');
+          await userService.updateTikTokTokens(
+            finalUserId, 
+            finalAccountId, 
+            result.newAccessToken, 
+            result.newRefreshToken
+          );
+          console.log('User tokens updated successfully');
+        } catch (updateError) {
+          console.error('Failed to update refreshed tokens in user record:', updateError);
+          // Continue anyway since the post was successful
+        }
+      }
+      
       console.log('TikTok post result:', JSON.stringify(result || {}, null, 2));
       console.log('=== TIKTOK POST VIDEO ROUTE END ===');
       
@@ -182,7 +201,10 @@ router.post('/post-video', async (req, res) => {
       }
       
       // Check if this is an authentication error
-      if (error?.message?.includes('auth') || error?.message?.includes('token')) {
+      if (error?.message?.includes('auth') || 
+          error?.message?.includes('token') || 
+          error?.message?.includes('invalid') || 
+          error?.message?.includes('expired')) {
         return res.status(401).json({ 
           error: 'TikTok authentication failed. Please reconnect your TikTok account and try again.',
           code: 'TIKTOK_AUTH_ERROR'
@@ -226,8 +248,8 @@ router.post('/post-video-multi', async (req, res) => {
     // If userId is provided, we need to look up the actual tokens from database
     let tokenizedAccounts = accounts;
     
-    if (userId && accounts.some(account => account.accountId && !account.accessToken)) {
-      // We need to fetch tokens from the database
+    if (userId) {
+      // We need to fetch tokens from the database regardless of whether accountId exists
       try {
         console.log(`Looking up tokens for user ${userId} in the database`);
         
@@ -244,22 +266,25 @@ router.post('/post-video-multi', async (req, res) => {
         
         console.log(`Found ${user.providerData.tiktok.length} TikTok accounts in database`);
         
-        // Match requested account IDs with database tokens
+        // Match requested accounts with database tokens by username or accountId
         tokenizedAccounts = accounts.map(account => {
-          // Find matching account in database
+          // Find matching account in database by accountId OR username
           const dbAccount = user.providerData.tiktok.find(
-            dbAcc => dbAcc.openId === account.accountId
+            dbAcc => (account.accountId && dbAcc.openId === account.accountId) || 
+                    (account.username && dbAcc.username === account.username) ||
+                    (account.displayName && (dbAcc.displayName === account.displayName || 
+                                           dbAcc.username === account.displayName))
           );
           
           if (!dbAccount || !dbAccount.accessToken) {
-            console.warn(`No matching database tokens found for account ${account.accountId}`);
+            console.warn(`No matching database tokens found for account ${account.username || account.displayName || account.accountId}`);
             return {
               ...account,
               foundInDb: false
             };
           }
           
-          console.log(`Found database tokens for account ${account.accountId}`);
+          console.log(`Found database tokens for account ${dbAccount.username || dbAccount.openId}`);
           
           // Return account with tokens from database
           return {

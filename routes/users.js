@@ -704,7 +704,7 @@ router.post('/:userId/social/twitter', async (req, res) => {
     try {
       console.log(`[TWITTER SAVE] Performing direct MongoDB update for user ${user._id}`);
       const db = mongoose.connection.db;
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('customers');
       
       const updateResult = await usersCollection.updateOne(
         { _id: user._id },
@@ -819,7 +819,7 @@ router.post('/:userId/social/twitter', async (req, res) => {
         
         // Use direct MongoDB driver to force update
         const db = mongoose.connection.db;
-        const usersCollection = db.collection('users');
+        const usersCollection = db.collection('customers');
         
         // Convert ObjectId to string representation if needed
         const userIdForQuery = typeof user._id === 'object' ? user._id : new mongoose.Types.ObjectId(user._id);
@@ -1137,7 +1137,7 @@ router.post('/:userId/force-update', async (req, res) => {
     
     // Use direct MongoDB driver operation to bypass Mongoose caching
     const db = mongoose.connection.db;
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection('customers');
     
     const result = await usersCollection.updateOne(
       { _id: user._id },

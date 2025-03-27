@@ -68,16 +68,53 @@ router.post('/', async (req, res) => {
     
     // Set up error handling for the request and stream
     let error = null;
+    let requestFinished = false;
+    let bytesReceived = 0;
+    
+    // Set up error handling for the request
     req.on('error', (err) => {
       console.error('[UPLOAD ROUTE] Request error:', err);
       error = err;
       writeStream.end();
     });
     
+    // Handle aborted connections
+    req.on('aborted', () => {
+      console.error('[UPLOAD ROUTE] Request aborted by client');
+      error = new Error('Request aborted by client');
+      writeStream.end();
+    });
+    
+    // Track data received for logging
+    req.on('data', (chunk) => {
+      bytesReceived += chunk.length;
+      
+      // Log progress for large files every 50MB
+      if (bytesReceived % (50 * 1024 * 1024) < chunk.length) {
+        console.log(`[UPLOAD ROUTE] Received ${(bytesReceived / (1024 * 1024)).toFixed(2)} MB so far`);
+      }
+    });
+    
+    // Handle request completion
+    req.on('end', () => {
+      console.log(`[UPLOAD ROUTE] Request completed, received ${(bytesReceived / (1024 * 1024)).toFixed(2)} MB total`);
+      requestFinished = true;
+    });
+    
+    // Set up error handling for the write stream
     writeStream.on('error', (err) => {
       console.error('[UPLOAD ROUTE] Write stream error:', err);
       error = err;
       req.unpipe(writeStream);
+      
+      // Clean up the partial file if it exists
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (e) {
+        console.error('[UPLOAD ROUTE] Error cleaning up partial file:', e?.message);
+      }
     });
     
     // When the file upload is complete, process it
@@ -85,16 +122,55 @@ router.post('/', async (req, res) => {
       if (error) {
         console.error('[UPLOAD ROUTE] Error during file upload:', error);
         try {
-          fs.unlinkSync(tempFilePath);
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
         } catch (e) {
           console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e?.message);
         }
-        return res.status(500).json({ error: 'Error uploading file', details: error?.message });
+        
+        // Only send response if headers haven't been sent yet
+        if (!res.headersSent) {
+          return res.status(500).json({ error: 'Error uploading file', details: error?.message });
+        }
+        return;
       }
       
-      console.log('[UPLOAD ROUTE] File received successfully, size:', fs.statSync(tempFilePath).size);
+      if (!requestFinished) {
+        console.error('[UPLOAD ROUTE] Stream finished but request did not complete properly');
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (e) {
+          console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e?.message);
+        }
+        
+        if (!res.headersSent) {
+          return res.status(500).json({ error: 'Upload stream ended prematurely' });
+        }
+        return;
+      }
       
       try {
+        // Make sure the file exists and has content
+        const stats = fs.statSync(tempFilePath);
+        console.log('[UPLOAD ROUTE] File received successfully, size:', stats.size);
+        
+        if (stats.size === 0) {
+          console.error('[UPLOAD ROUTE] Received empty file');
+          try {
+            fs.unlinkSync(tempFilePath);
+          } catch (e) {
+            console.error('[UPLOAD ROUTE] Error cleaning up empty file:', e?.message);
+          }
+          
+          if (!res.headersSent) {
+            return res.status(400).json({ error: 'Received empty file' });
+          }
+          return;
+        }
+        
         // Upload the file to R2
         const contentType = req.headers['content-type'] || 'video/mp4';
         const originalFilename = req.headers['x-file-name'] || `video-${uniqueSuffix}.mp4`;
@@ -102,7 +178,7 @@ router.post('/', async (req, res) => {
         console.log('[UPLOAD ROUTE] File details:', {
           originalname: originalFilename,
           contentType: contentType,
-          size: fs.statSync(tempFilePath).size,
+          size: stats.size,
           path: tempFilePath
         });
         
@@ -123,23 +199,29 @@ router.post('/', async (req, res) => {
           console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', cleanupError?.message);
         }
         
-        // Return the R2 URL
-        res.status(200).json({
-          success: true,
-          url: result.url,
-          key: result.key
-        });
+        // Return the R2 URL if headers haven't been sent yet
+        if (!res.headersSent) {
+          res.status(200).json({
+            success: true,
+            url: result.url,
+            key: result.key
+          });
+        }
       } catch (uploadError) {
         console.error('[UPLOAD ROUTE] Error uploading to R2:', uploadError?.message);
         
         // Clean up the temporary file
         try {
-          fs.unlinkSync(tempFilePath);
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
         } catch (e) {
           console.error('[UPLOAD ROUTE] Error cleaning up temporary file:', e?.message);
         }
         
-        res.status(500).json({ error: 'Error uploading file to R2', details: uploadError?.message });
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Error uploading file to R2', details: uploadError?.message });
+        }
       }
     });
     
@@ -147,7 +229,9 @@ router.post('/', async (req, res) => {
     req.pipe(writeStream);
   } catch (error) {
     console.error('[UPLOAD ROUTE] Error handling upload:', error?.message);
-    res.status(500).json({ error: 'Error uploading file', details: error?.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Error uploading file', details: error?.message });
+    }
   }
 });
 

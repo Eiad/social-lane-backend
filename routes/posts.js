@@ -4,6 +4,7 @@ const Post = require('../models/Post');
 const { processPost, checkUserLimits } = require('../services/scheduler');
 const { hasReachedLimit } = require('../utils/roleLimits');
 const User = require('../models/User');
+const userService = require('../services/userService');
 
 // @route   GET /posts
 // @desc    Get all posts
@@ -224,17 +225,87 @@ router.post('/', async (req, res) => {
 
     // Handle TikTok accounts
     if (tiktok_accounts && Array.isArray(tiktok_accounts) && tiktok_accounts.length > 0) {
-      // Make sure the TikTok accounts have the right schema format
-      postData.tiktok_accounts = tiktok_accounts.map(account => ({
-        accessToken: account?.accessToken,
-        refreshToken: account?.refreshToken || null,
-        openId: account?.openId
-      }));
+      // Check if we need to fetch token information from the database
+      const needsDatabaseLookup = tiktok_accounts.some(account => 
+        !account.accessToken || !account.openId
+      );
+      
+      if (needsDatabaseLookup && userId) {
+        console.log('TikTok accounts missing token information, fetching from database for user:', userId);
+        try {
+          // Get user's TikTok accounts from database
+          const dbTiktokAccounts = await userService.getSocialMediaTokens(userId, 'tiktok');
+          
+          if (dbTiktokAccounts && Array.isArray(dbTiktokAccounts) && dbTiktokAccounts.length > 0) {
+            console.log(`Found ${dbTiktokAccounts.length} TikTok accounts in database`);
+            
+            // Map accounts with tokens from database based on username, displayName, or accountId
+            postData.tiktok_accounts = tiktok_accounts.map(account => {
+              // Look for matching account in database
+              const dbAccount = dbTiktokAccounts.find(
+                dbAcc => (account.accountId && dbAcc.openId === account.accountId) || 
+                        (account.username && dbAcc.username === account.username) ||
+                        (account.displayName && (dbAcc.displayName === account.displayName || 
+                                               dbAcc.username === account.displayName))
+              );
+              
+              if (!dbAccount) {
+                console.warn(`No matching database account found for TikTok account: ${account.username || account.displayName || account.accountId}`);
+                return null;
+              }
+              
+              console.log(`Found database tokens for TikTok account: ${dbAccount.username || dbAccount.openId}`);
+              
+              // Return account with tokens from database
+              return {
+                accessToken: dbAccount.accessToken,
+                refreshToken: dbAccount.refreshToken || null,
+                openId: dbAccount.openId,
+                username: account.username || dbAccount.username || '',
+                displayName: account.displayName || dbAccount.displayName || ''
+              };
+            }).filter(Boolean); // Remove null entries (accounts not found in database)
+            
+            console.log(`Successfully matched ${postData.tiktok_accounts.length}/${tiktok_accounts.length} TikTok accounts with database tokens`);
+          } else {
+            console.warn('No TikTok accounts found in database for user:', userId);
+            // Make original mapping as fallback
+            postData.tiktok_accounts = tiktok_accounts.map(account => ({
+              accessToken: account?.accessToken,
+              refreshToken: account?.refreshToken || null,
+              openId: account?.openId,
+              username: account?.username || '',
+              displayName: account?.displayName || ''
+            }));
+          }
+        } catch (error) {
+          console.error('Error fetching TikTok tokens from database:', error);
+          // Make original mapping as fallback
+          postData.tiktok_accounts = tiktok_accounts.map(account => ({
+            accessToken: account?.accessToken,
+            refreshToken: account?.refreshToken || null,
+            openId: account?.openId,
+            username: account?.username || '',
+            displayName: account?.displayName || ''
+          }));
+        }
+      } else {
+        // No database lookup needed, use account data as provided
+        postData.tiktok_accounts = tiktok_accounts.map(account => ({
+          accessToken: account?.accessToken,
+          refreshToken: account?.refreshToken || null,
+          openId: account?.openId,
+          username: account?.username || '',
+          displayName: account?.displayName || ''
+        }));
+      }
+      
       console.log('Formatted TikTok accounts for database:', 
         postData.tiktok_accounts.map(acc => ({
           openId: acc?.openId,
           hasAccessToken: !!acc?.accessToken,
-          hasRefreshToken: !!acc?.refreshToken
+          hasRefreshToken: !!acc?.refreshToken,
+          username: acc?.username || ''
         }))
       );
     } else if (tiktok_access_token) {

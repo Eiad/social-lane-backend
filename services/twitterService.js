@@ -238,7 +238,7 @@ async function postMediaTweet(videoUrl, accessToken, text = '', accessTokenSecre
             method: 'get',
             url: videoUrl,
             responseType: 'arraybuffer',
-            timeout: 60000,
+            timeout: 120000, // 2 minutes
             maxContentLength: 600 * 1024 * 1024,
             maxBodyLength: 600 * 1024 * 1024,
             validateStatus: (status) => status >= 200 && status < 300,

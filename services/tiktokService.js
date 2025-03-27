@@ -1,5 +1,6 @@
 const axios = require('axios');
 const FormData = require('form-data');
+const assetsService = require('./assetsService');
 
 const TIKTOK_API_KEY = process.env.TIKTOK_API_KEY;
 const TIKTOK_CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET;
@@ -365,7 +366,6 @@ async function getUserInfo(accessToken, refreshToken = '') {
       'follower_count',
       'following_count',
       'likes_count',
-      'video_count',
       'username'
     ];
     
@@ -385,20 +385,60 @@ async function getUserInfo(accessToken, refreshToken = '') {
           has_avatar_url_100: !!userData.avatar_url_100,
           has_display_name: !!userData.display_name
         });
+
+        // Upload only the avatar_url_100 to R2
+        let r2AvatarUrl100 = null;
+
+        if (userData.avatar_url_100) {
+          try {
+            console.log('Uploading avatar_url_100 to R2:', userData.avatar_url_100);
+            const result = await assetsService.uploadAssetFromUrl(
+              userData.avatar_url_100,
+              `tiktok-avatar-100-${userData.open_id}-${Date.now()}.jpg`
+            );
+            r2AvatarUrl100 = result.url;
+            console.log('Avatar 100 uploaded to R2:', r2AvatarUrl100);
+          } catch (error) {
+            console.error('Error uploading avatar_100 to R2:', error?.message);
+            // Fall back to original URL if upload fails
+            r2AvatarUrl100 = userData.avatar_url_100;
+          }
+        } else if (userData.avatar_url) {
+          // Only if avatar_url_100 is not available, use avatar_url as fallback
+          try {
+            console.log('avatar_url_100 not available, uploading avatar_url to R2:', userData.avatar_url);
+            const result = await assetsService.uploadAssetFromUrl(
+              userData.avatar_url,
+              `tiktok-avatar-${userData.open_id}-${Date.now()}.jpg`
+            );
+            r2AvatarUrl100 = result.url;
+            console.log('Avatar uploaded to R2:', r2AvatarUrl100);
+          } catch (error) {
+            console.error('Error uploading avatar to R2:', error?.message);
+            // Fall back to original URL if upload fails
+            r2AvatarUrl100 = userData.avatar_url;
+          }
+        }
         
         // Return cleaned user data with all required fields
         return {
           username: userData.username || '',
           display_name: userData.display_name || userData.username || '',
+          
+          // Keep original TikTok avatar_url (do not upload to R2)
           avatar_url: userData.avatar_url || '',
-          avatar_url_100: userData.avatar_url_100 || userData.avatar_url || '',
+          avatarUrl: userData.avatar_url || '',
+          
+          // Only use R2 for avatarUrl100 and avatar_url_100
+          avatarUrl100: r2AvatarUrl100 || userData.avatar_url_100 || userData.avatar_url || '',
+          avatar_url_100: r2AvatarUrl100 || userData.avatar_url_100 || userData.avatar_url || '',
+          
           bio_description: userData.bio_description || '',
           profile_deep_link: userData.profile_deep_link || '',
           is_verified: userData.is_verified || false,
           follower_count: userData.follower_count || 0,
           following_count: userData.following_count || 0,
           likes_count: userData.likes_count || 0,
-          video_count: userData.video_count || 0,
           open_id: userData.open_id || '',
           union_id: userData.union_id || ''
         };
@@ -417,11 +457,36 @@ async function getUserInfo(accessToken, refreshToken = '') {
         
         const basicUserData = retryResponse?.data?.data?.user;
         if (basicUserData) {
+          // Upload avatar URL to R2 if it exists
+          let r2AvatarUrl = null;
+          if (basicUserData.avatar_url) {
+            try {
+              console.log('Uploading basic avatar_url to R2:', basicUserData.avatar_url);
+              const result = await assetsService.uploadAssetFromUrl(
+                basicUserData.avatar_url,
+                `tiktok-avatar-${basicUserData.open_id}-${Date.now()}.jpg`
+              );
+              r2AvatarUrl = result.url;
+              console.log('Basic avatar uploaded to R2:', r2AvatarUrl);
+            } catch (error) {
+              console.error('Error uploading basic avatar to R2:', error?.message);
+              // Fall back to original URL if upload fails
+              r2AvatarUrl = basicUserData.avatar_url;
+            }
+          }
+
           return {
             username: basicUserData.username || '',
-            display_name: basicUserData.display_name || basicUserData.username || '',
+            display_name: basicUserData.display_name || '',
+            
+            // Keep original avatar_url
             avatar_url: basicUserData.avatar_url || '',
-            avatar_url_100: basicUserData.avatar_url || '', // Use avatar_url as fallback
+            avatarUrl: basicUserData.avatar_url || '',
+            
+            // Only use R2 URL for avatarUrl100
+            avatarUrl100: r2AvatarUrl || basicUserData.avatar_url || '',
+            avatar_url_100: r2AvatarUrl || basicUserData.avatar_url || '',
+            
             open_id: basicUserData.open_id || ''
           };
         }
@@ -432,6 +497,8 @@ async function getUserInfo(accessToken, refreshToken = '') {
       return {
         username: 'TikTok User',
         display_name: 'TikTok User',
+        avatarUrl: null,
+        avatarUrl100: null,
         avatar_url: null,
         avatar_url_100: null,
         open_id: ''

@@ -9,6 +9,7 @@ const uploadRoutes = require('./routes/upload');
 const postsRoutes = require('./routes/posts');
 const usersRoutes = require('./routes/users');
 const paypalRoutes = require('./routes/paypal');
+const assetsRoutes = require('./routes/assets');
 const rawBodyParser = require('./middleware/rawBodyParser');
 const axios = require('axios');
 
@@ -159,6 +160,7 @@ app.use('/upload', uploadRoutes);
 app.use('/posts', postsRoutes);
 app.use('/users', usersRoutes);
 app.use('/paypal', paypalRoutes);
+app.use('/assets', assetsRoutes);
 
 // Forward /schedules to /posts for backward compatibility
 app.post('/schedules', (req, res) => {

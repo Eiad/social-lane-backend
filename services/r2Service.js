@@ -21,10 +21,13 @@ async function uploadFile(fileBuffer, fileName, contentType) {
     // Generate a unique file name if one is not provided
     const uniqueFileName = fileName || `${Date.now()}-${Math.random().toString(36).substring(2, 15)}.mp4`;
     
+    // Add the video-posts folder prefix to the key
+    const fileKey = `video-posts/${uniqueFileName}`;
+    
     // Upload the file to R2
     const uploadParams = {
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: uniqueFileName,
+      Bucket: process.env.R2_VIDEOS_BUCKET_NAME,
+      Key: fileKey,
       Body: fileBuffer,
       ContentType: contentType || 'video/mp4',
     };
@@ -35,12 +38,12 @@ async function uploadFile(fileBuffer, fileName, contentType) {
     console.log(`[R2Service] Upload successful:`, response);
     
     // Generate the public URL for the uploaded file
-    const fileUrl = `${process.env.R2_MEDIA_PUBLIC_DOMAIN}/${uniqueFileName}`;
+    const fileUrl = `${process.env.R2_VIDEOS_PUBLIC_DOMAIN}/${fileKey}`;
     
     return {
       success: true,
       url: fileUrl,
-      key: uniqueFileName,
+      key: fileKey,
     };
   } catch (error) {
     console.error('[R2Service] Error uploading file:', error?.message);
@@ -92,8 +95,13 @@ async function getPresignedUrl(key, expiresIn = 3600) {
   try {
     console.log(`[R2Service] Generating presigned URL for key: ${key}`);
     
+    // If the key doesn't include the video-posts folder and doesn't start with a slash, add the folder prefix
+    if (!key.includes('video-posts/') && !key.startsWith('/')) {
+      key = `video-posts/${key}`;
+    }
+    
     const command = new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
+      Bucket: process.env.R2_VIDEOS_BUCKET_NAME,
       Key: key,
     });
     

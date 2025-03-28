@@ -121,6 +121,9 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // Initialize platforms if not provided
+    const platformsToCheck = platforms || [];
+
     // Check user limits if scheduling posts
     if (isScheduled) {
       try {
@@ -158,7 +161,7 @@ router.post('/', async (req, res) => {
     }
 
     // Check social accounts limit
-    if (platforms.includes('tiktok') || platforms.includes('twitter')) {
+    if (platformsToCheck.includes('tiktok') || platformsToCheck.includes('twitter')) {
       const user = await User.findOne({ uid: userId });
       if (!user) {
         return res.status(404).json({
@@ -221,6 +224,9 @@ router.post('/', async (req, res) => {
         // Extract platform names from object keys
         postData.platforms = Object.keys(platforms);
       }
+    } else {
+      // Use empty array if no platforms provided
+      postData.platforms = [];
     }
 
     // Handle TikTok accounts
@@ -321,11 +327,69 @@ router.post('/', async (req, res) => {
     
     // Handle Twitter accounts array
     if (twitter_accounts && Array.isArray(twitter_accounts) && twitter_accounts.length > 0) {
-      // Store only needed account info without tokens - tokens will be fetched from the database when processing the post
-      postData.twitter_accounts = twitter_accounts.map(account => ({
-        userId: account?.userId,
-        username: account?.username || ''
-      }));
+      // Check if we need to fetch token information from the database
+      const needsDatabaseLookup = twitter_accounts.some(account => 
+        !account.accessToken || 
+        !account.accessTokenSecret || 
+        account.accessToken === 'placeholder_to_be_replaced_from_db' || 
+        account.accessTokenSecret === 'placeholder_to_be_replaced_from_db'
+      );
+      
+      if (needsDatabaseLookup && userId) {
+        console.log('Twitter accounts missing token information or using placeholders, fetching from database for user:', userId);
+        try {
+          // Get user's Twitter accounts from database
+          const dbTwitterAccounts = await userService.getSocialMediaTokens(userId, 'twitter');
+          
+          if (dbTwitterAccounts && Array.isArray(dbTwitterAccounts) && dbTwitterAccounts.length > 0) {
+            console.log(`Found ${dbTwitterAccounts.length} Twitter accounts in database`);
+            
+            // Map accounts with tokens from database based on userId or username
+            postData.twitter_accounts = twitter_accounts.map(account => {
+              // Look for matching account in database
+              const dbAccount = dbTwitterAccounts.find(
+                dbAcc => (account.userId && (dbAcc.userId === account.userId || dbAcc.user_id === account.userId)) || 
+                        (account.username && dbAcc.username === account.username)
+              );
+              
+              if (!dbAccount) {
+                console.warn(`No matching database account found for Twitter account: ${account.username || account.userId}`);
+                return account; // Keep the original account data as fallback
+              }
+              
+              console.log(`Found database tokens for Twitter account: ${dbAccount.username || dbAccount.userId || dbAccount.user_id}`);
+              
+              // Return account with tokens from database
+              return {
+                userId: account.userId || dbAccount.userId || dbAccount.user_id,
+                username: account.username || dbAccount.username || '',
+                accessToken: dbAccount.accessToken,
+                accessTokenSecret: dbAccount.accessTokenSecret
+              };
+            });
+            
+            console.log(`Successfully matched Twitter accounts with database tokens:`, 
+              postData.twitter_accounts.map(acc => ({
+                userId: acc.userId,
+                username: acc.username,
+                hasAccessToken: !!acc.accessToken,
+                hasAccessTokenSecret: !!acc.accessTokenSecret
+              }))
+            );
+          } else {
+            console.warn('No Twitter accounts found in database for user:', userId);
+            // Store the accounts as provided
+            postData.twitter_accounts = twitter_accounts;
+          }
+        } catch (error) {
+          console.error('Error fetching Twitter tokens from database:', error);
+          // Store the accounts as provided
+          postData.twitter_accounts = twitter_accounts;
+        }
+      } else {
+        // No database lookup needed, use account data as provided
+        postData.twitter_accounts = twitter_accounts;
+      }
     }
     
     // Set status based on whether it's scheduled

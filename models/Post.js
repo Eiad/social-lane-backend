@@ -34,11 +34,13 @@ const TikTokAccountSchema = new mongoose.Schema({
 const TwitterAccountSchema = new mongoose.Schema({
   accessToken: {
     type: String,
-    required: true
+    // Not required, can be fetched from DB based on userId
+    required: false
   },
   accessTokenSecret: {
     type: String,
-    required: true
+    // Not required, can be fetched from DB based on userId
+    required: false
   },
   userId: {
     type: String,

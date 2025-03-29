@@ -286,7 +286,7 @@ app.post('/social/tiktok/post', async (req, res) => {
       };
       console.log('Using direct accessToken format');
     }
-    // Case 3: Handle tiktokPayload format from social-posting.js
+    // Case 3: Handle tiktokPayload format from media-posting.js
     else if (req.body?.tiktokPayload) {
       const payload = req.body.tiktokPayload;
       if (payload.accounts && payload.accounts.length > 0) {

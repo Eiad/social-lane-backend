@@ -380,6 +380,81 @@ router.delete('/:uid/social/twitter', async (req, res) => {
   }
 });
 
+// Get user's Twitter accounts
+router.get('/:uid/social/twitter', async (req, res) => {
+  try {
+    // Set explicit CORS headers for this specific route to overcome CORS issues
+    res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'https://sociallane-frontend.mindio.chat');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    console.log('Processing GET request for Twitter accounts');
+    
+    const { uid } = req.params;
+    
+    if (!uid) {
+      console.error('Missing required user ID parameter');
+      return res.status(400).json({
+        success: false,
+        error: 'User ID is required'
+      });
+    }
+    
+    // Get user from database
+    const user = await User.findOne({ uid });
+    
+    if (!user) {
+      console.error(`User with UID ${uid} not found`);
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    console.log(`Found user with UID ${uid}, checking for Twitter accounts`);
+    
+    // Extract Twitter accounts
+    let twitterAccounts = [];
+    
+    if (user.providerData && user.providerData.twitter) {
+      if (Array.isArray(user.providerData.twitter)) {
+        // Filter out sensitive data from each Twitter account
+        twitterAccounts = user.providerData.twitter.map(account => ({
+          userId: account.userId,
+          username: account.username,
+          name: account.name || account.username,
+          profileImageUrl: account.profileImageUrl
+        }));
+      } else {
+        // If it's a single account object, filter it
+        const twitterAccount = user.providerData.twitter;
+        twitterAccounts = [{
+          userId: twitterAccount.userId,
+          username: twitterAccount.username,
+          name: twitterAccount.name || twitterAccount.username,
+          profileImageUrl: twitterAccount.profileImageUrl
+        }];
+      }
+    }
+    
+    console.log(`Found ${twitterAccounts.length} Twitter accounts for user ${uid}`);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        twitter: twitterAccounts
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching Twitter accounts:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error: ' + (error?.message || 'Unknown error')
+    });
+  }
+});
+
 // Update user's TikTok tokens
 router.post('/:uid/social/tiktok', async (req, res) => {
   try {

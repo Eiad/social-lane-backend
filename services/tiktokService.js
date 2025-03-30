@@ -113,6 +113,16 @@ async function refreshTikTokToken(refreshToken) {
     };
   } catch (error) {
     console.error('Error refreshing TikTok token:', error?.response?.data || error?.message);
+    
+    // Enhanced error handling for refresh token failures
+    if (error?.response?.status === 401 || error?.response?.status === 403) {
+      throw new Error('Refresh token is invalid or expired. Please reconnect your TikTok account.');
+    }
+    
+    if (error?.response?.data?.error_description) {
+      throw new Error(`Failed to refresh TikTok access token: ${error.response.data.error_description}`);
+    }
+    
     throw new Error('Failed to refresh TikTok access token: ' + (error?.response?.data?.error?.message || error?.message));
   }
 }
@@ -341,16 +351,16 @@ function handleTikTokError(error) {
     } else if (errorCode === 'access_token_has_expired' || errorCode === 'token_has_expired') {
       throw new Error('Your TikTok access token has expired. Please reconnect your TikTok account.');
     } else if (errorCode === 'invalid_access_token' || errorCode?.includes('invalid_token') || errorMessage?.includes('invalid token')) {
-      throw new Error('TikTok API error: The access token is invalid or not found in the request.');
+      throw new Error('TikTok authorization invalid. Please reconnect your TikTok account.');
     } else if (errorCode === 'invalid_refresh_token' || errorMessage?.includes('refresh token')) {
-      throw new Error('TikTok API error: The refresh token is invalid. Please reconnect your TikTok account.');
+      throw new Error('TikTok refresh token is invalid. Please reconnect your TikTok account.');
     } else {
       throw new Error(`TikTok API error: ${errorMessage || errorCode}`);
     }
   } else if (error?.message?.includes('access token has expired') || 
              error?.message?.includes('token expired') ||
              error?.message?.toLowerCase().includes('invalid token')) {
-    throw new Error('TikTok API error: The access token is invalid or not found in the request.');
+    throw new Error('TikTok authorization invalid. Please reconnect your TikTok account.');
   }
   
   throw error;

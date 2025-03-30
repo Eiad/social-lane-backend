@@ -12,6 +12,16 @@ const paypalRoutes = require('./routes/paypal');
 const assetsRoutes = require('./routes/assets');
 const rawBodyParser = require('./middleware/rawBodyParser');
 const axios = require('axios');
+// Import rate limiters
+const { 
+  defaultLimiter, 
+  authLimiter, 
+  userLimiter, 
+  postingLimiter, 
+  publicLimiter 
+} = require('./middleware/rateLimiter');
+// Import rate limit logger
+const { rateLimitLogger } = require('./middleware/rateLimitLogger');
 
 const app = express();
 const port = process.env.PORT || 3335;
@@ -162,6 +172,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Apply rate limit logger middleware before any rate limiters
+app.use(rateLimitLogger);
+
+// Apply global rate limiter to all requests
+app.use(defaultLimiter);
+
 // Add specific CORS headers for TikTok routes
 app.use('/tiktok', (req, res, next) => {
   res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'https://sociallane-frontend.mindio.chat');
@@ -207,24 +223,24 @@ app.use('/users', (req, res, next) => {
   next();
 });
 
-// Routes
-app.use('/tiktok', tiktokRoutes);
-app.use('/twitter', twitterRoutes);
-app.use('/upload', uploadRoutes);
-app.use('/posts', postsRoutes);
-app.use('/users', usersRoutes);
-app.use('/paypal', paypalRoutes);
-app.use('/assets', assetsRoutes);
+// Routes with specific rate limiters
+app.use('/tiktok', postingLimiter, tiktokRoutes);
+app.use('/twitter', postingLimiter, twitterRoutes);
+app.use('/upload', postingLimiter, uploadRoutes);
+app.use('/posts', postingLimiter, postsRoutes);
+app.use('/users', userLimiter, usersRoutes);
+app.use('/paypal', authLimiter, paypalRoutes);
+app.use('/assets', publicLimiter, assetsRoutes);
 
-// Forward /schedules to /posts for backward compatibility
-app.post('/schedules', (req, res) => {
+// Forward /schedules to /posts for backward compatibility with rate limiting
+app.post('/schedules', postingLimiter, (req, res) => {
   console.log('Forwarding request from /schedules to /posts for scheduling');
   req.url = '/';
   postsRoutes(req, res);
 });
 
 // Add a route handler for social/tiktok/post that forwards to the TikTok post-video endpoint
-app.post('/social/tiktok/post', async (req, res) => {
+app.post('/social/tiktok/post', postingLimiter, async (req, res) => {
   console.log('Forwarding request from /social/tiktok/post to TikTok endpoints');
   
   // Log the incoming payload structure

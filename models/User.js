@@ -1,8 +1,44 @@
+// File: models/User.js
 const mongoose = require('mongoose');
+
+// Define the TikTok account schema within the User schema
+const TikTokAccountSchema = new mongoose.Schema({
+  accessToken: {
+    type: String,
+    required: true
+  },
+  refreshToken: {
+    type: String // Ensure this exists to store refresh tokens
+  },
+  openId: {
+    type: String,
+    required: true,
+    unique: true // Ensure openId is unique within the array for a user
+  },
+  username: {
+    type: String
+  },
+  displayName: {
+    type: String
+  },
+  avatarUrl: {
+    type: String
+  },
+  avatarUrl100: {
+    type: String
+  },
+  index: {
+    type: Number
+  },
+  // Add a field to track token updates
+  tokensUpdatedAt: {
+    type: Date
+  }
+}, { _id: false }); // _id: false prevents MongoDB from adding an _id field to subdocuments
 
 /**
  * User Schema
- * 
+ *
  * Note: Role system was migrated from Free/Pro to Starter/Launch/Rise/Scale
  * - Starter (was Free): Free tier
  * - Launch (was Pro): $9/month tier
@@ -75,10 +111,11 @@ const UserSchema = new mongoose.Schema({
     of: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  // For storing provider-specific data
+  // For storing provider-specific data including TikTok accounts
   providerData: {
-    type: Object,
-    default: {}
+    tiktok: [TikTokAccountSchema], // Embed TikTokAccountSchema here
+    twitter: mongoose.Schema.Types.Mixed, // Keep other providers flexible
+    // Add other providers as needed
   },
   createdAt: {
     type: Date,
@@ -94,5 +131,7 @@ const UserSchema = new mongoose.Schema({
 
 // Create only necessary indexes (removed duplicates)
 UserSchema.index({ role: 1 });
+// Add index for finding users by TikTok openId efficiently
+UserSchema.index({ 'providerData.tiktok.openId': 1 });
 
-module.exports = mongoose.model('User', UserSchema, 'customers'); 
+module.exports = mongoose.model('User', UserSchema, 'customers');

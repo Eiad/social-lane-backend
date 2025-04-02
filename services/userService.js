@@ -1,3 +1,4 @@
+// File: services/userService.js
 const User = require('../models/User');
 
 /**
@@ -7,11 +8,11 @@ const User = require('../models/User');
  */
 const createOrUpdateUser = async (userData) => {
   const { uid, email, displayName, photoURL } = userData;
-  
+
   if (!uid || !email) {
     throw new Error('User ID and email are required');
   }
-  
+
   try {
     // Find and update the user, or create if not exists
     const user = await User.findOneAndUpdate(
@@ -25,7 +26,8 @@ const createOrUpdateUser = async (userData) => {
         },
         $setOnInsert: {
           role: 'Starter',
-          createdAt: new Date()
+          createdAt: new Date(),
+          providerData: {} // Ensure providerData is initialized
         }
       },
       {
@@ -34,7 +36,7 @@ const createOrUpdateUser = async (userData) => {
         runValidators: true
       }
     );
-    
+
     return user;
   } catch (error) {
     console.error('Error in createOrUpdateUser:', error);
@@ -67,20 +69,20 @@ const getUserByUid = async (uid) => {
 const getSocialMediaTokens = async (uid, platform) => {
   try {
     console.log(`[USER SERVICE] Getting ${platform} tokens for user ${uid}`);
-    
+
     // Get the user
     const user = await User.findOne({ uid });
     if (!user) {
       console.warn(`[USER SERVICE] User not found with UID: ${uid}`);
       return null;
     }
-    
+
     // Check if the user has provider data for the requested platform
     if (!user.providerData || !user.providerData[platform]) {
       console.warn(`[USER SERVICE] No ${platform} provider data found for user ${uid}`);
       return null;
     }
-    
+
     console.log(`[USER SERVICE] Found ${platform} tokens for user ${uid}`);
     return user.providerData[platform];
   } catch (error) {
@@ -99,23 +101,23 @@ const updateUserRole = async (uid, role) => {
   if (!['Starter', 'Launch', 'Rise', 'Scale'].includes(role)) {
     throw new Error('Invalid role. Must be one of: Starter, Launch, Rise, Scale');
   }
-  
+
   try {
     const updates = {
       role
     };
-    
+
     // If upgrading from Starter, set subscription start date
     if (role !== 'Starter') {
       updates.subscriptionStartDate = new Date();
     }
-    
+
     const user = await User.findOneAndUpdate(
       { uid },
       updates,
       { new: true, runValidators: true }
     );
-    
+
     return user;
   } catch (error) {
     console.error('Error in updateUserRole:', error);
@@ -124,14 +126,15 @@ const updateUserRole = async (uid, role) => {
 };
 
 /**
- * Check if a user has Pro privileges
+ * Check if a user has Pro privileges (legacy - should check specific roles now)
  * @param {string} uid - Firebase UID
  * @returns {Promise<boolean>} - True if user has Pro role, false otherwise
  */
 const isUserPro = async (uid) => {
   try {
     const user = await User.findOne({ uid });
-    return user?.role === 'Pro';
+    // Adjust this logic based on which roles count as "Pro" or have certain features
+    return ['Launch', 'Rise', 'Scale'].includes(user?.role);
   } catch (error) {
     console.error('Error in isUserPro:', error);
     return false;
@@ -139,272 +142,190 @@ const isUserPro = async (uid) => {
 };
 
 /**
- * Update user's social media tokens
+ * Update user's social media tokens for a specific provider.
+ * Handles merging/adding multiple accounts correctly, especially for TikTok.
  * @param {string} uid - User's Firebase UID
  * @param {string} provider - Social media provider (e.g., 'twitter', 'tiktok')
- * @param {Array|Object} tokenData - Token data to store
- * @returns {Promise<Object>} - The updated user
+ * @param {Array|Object} tokenData - Token data to store. Should be an array for multi-account providers like TikTok/Twitter.
+ * @returns {Promise<Object>} - The updated user document.
  */
 const updateSocialMediaTokens = async (uid, provider, tokenData) => {
   if (!uid || !provider || !tokenData) {
     throw new Error('User ID, provider, and token data are required');
   }
-  
+
+  console.log(`[USER SERVICE] Updating ${provider} tokens for user ${uid}. Received data type: ${typeof tokenData}, isArray: ${Array.isArray(tokenData)}`);
+
+  // Ensure tokenData is always an array for consistent processing
+  const accountsToProcess = Array.isArray(tokenData) ? tokenData : [tokenData];
+
+  if (accountsToProcess.length === 0) {
+    console.warn(`[USER SERVICE] No valid accounts provided for ${provider} update.`);
+    // Still fetch user to return current state
+    return await User.findOne({ uid });
+  }
+
+  console.log(`[USER SERVICE] Processing ${accountsToProcess.length} ${provider} account(s)`);
+
   try {
-    // First get the user to check current tokens
+    // Find user, creating if necessary (more robust than just findOne)
     let user = await User.findOne({ uid });
-    
     if (!user) {
-      console.error(`[USER SERVICE] User not found with UID: ${uid}`);
-      // Create a basic user record if one doesn't exist
-      const newUser = new User({
+      console.log(`[USER SERVICE] User ${uid} not found, creating new user.`);
+      user = new User({
         uid,
         email: `user-${uid.substring(0, 8)}@example.com`, // Placeholder email
         displayName: `User ${uid.substring(0, 8)}`, // Placeholder name
-        createdAt: new Date(),
-        lastLogin: new Date(),
-        providerData: {}
+        providerData: {} // Initialize providerData
       });
-      
-      try {
-        await newUser.save();
-        console.log(`[USER SERVICE] Created new user record for ${uid}`);
-        // Continue with the new user
-        user = newUser;
-      } catch (createError) {
-        console.error(`[USER SERVICE] Error creating new user:`, createError);
-        throw new Error('Failed to create user record: ' + createError.message);
-      }
+      // Note: No save() here yet, it happens during the update below
     }
-    
-    // Initialize providerData if it doesn't exist
+
+    // Ensure providerData exists
     if (!user.providerData) {
       user.providerData = {};
     }
-    
-    // For TikTok, handle multiple accounts
-    if (provider === 'tiktok') {
-      if (!Array.isArray(tokenData)) {
-        throw new Error('TikTok token data must be an array');
+    // Ensure the specific provider array exists
+    if (!user.providerData[provider] || !Array.isArray(user.providerData[provider])) {
+      user.providerData[provider] = [];
+    }
+
+    const existingAccounts = user.providerData[provider];
+    const accountMap = new Map(existingAccounts.map(acc => [acc.openId || acc.userId, acc])); // Use openId for TikTok, userId for Twitter
+
+    accountsToProcess.forEach(newAccount => {
+      const accountId = newAccount.openId || newAccount.userId; // Identifier
+      if (!accountId) {
+        console.warn(`[USER SERVICE] Skipping account for provider ${provider} due to missing ID:`, newAccount);
+        return;
       }
-      
-      console.log(`[USER SERVICE] Processing ${tokenData.length} TikTok accounts for user ${uid}`);
-      
-      // Validate and clean each account's data
-      const validatedAccounts = tokenData.map(account => ({
-        accessToken: account?.accessToken || '',
-        openId: account?.openId || '',
-        refreshToken: account?.refreshToken || '',
-        username: account?.username || account?.userInfo?.username || `TikTok Account ${account?.index || 0}`,
-        displayName: account?.displayName || account?.userInfo?.display_name || '',
-        avatarUrl: account?.avatarUrl || account?.userInfo?.avatar_url || '',
-        avatarUrl100: account?.avatarUrl100 || account?.userInfo?.avatar_url_100 || '',
-        index: account?.index || 0
-      }));
-      
-      // Initialize tiktok array if it doesn't exist
-      if (!user.providerData.tiktok) {
-        user.providerData.tiktok = [];
+
+      // Basic validation for required tokens
+      if (provider === 'tiktok' && (!newAccount.accessToken || !newAccount.openId)) {
+         console.warn(`[USER SERVICE] Skipping TikTok account ${accountId}: Missing accessToken or openId.`);
+         return;
       }
-      
-      // Merge existing accounts with new ones, avoiding duplicates
-      const existingAccounts = user.providerData.tiktok || [];
-      console.log(`[USER SERVICE] User has ${existingAccounts.length} existing TikTok accounts`);
-      
-      // Create merged account list
-      const mergedAccounts = [...existingAccounts];
-      
-      // Add new accounts, avoiding duplicates based on openId
-      for (const newAccount of validatedAccounts) {
-        const existingIndex = mergedAccounts.findIndex(acc => acc.openId === newAccount.openId);
-        
-        if (existingIndex !== -1) {
-          // Update existing account with new data
-          console.log(`[USER SERVICE] Updating existing TikTok account: ${newAccount.openId}`);
-          mergedAccounts[existingIndex] = {
-            ...mergedAccounts[existingIndex],
+       if (provider === 'twitter' && (!newAccount.accessToken || !newAccount.accessTokenSecret || !newAccount.userId)) {
+         console.warn(`[USER SERVICE] Skipping Twitter account ${accountId}: Missing required tokens or userId.`);
+         return;
+       }
+
+      if (accountMap.has(accountId)) {
+        // Update existing account
+        console.log(`[USER SERVICE] Updating existing ${provider} account: ${accountId}`);
+        const existingAccount = accountMap.get(accountId);
+        // Merge new data, potentially overwriting tokens
+        Object.assign(existingAccount, newAccount, { tokensUpdatedAt: new Date() });
+      } else {
+        // Add new account
+        console.log(`[USER SERVICE] Adding new ${provider} account: ${accountId}`);
+        // Ensure essential fields exist
+        const accountToAdd = {
+            ...(provider === 'tiktok' ? { openId: accountId } : { userId: accountId }),
             ...newAccount,
-          };
-        } else {
-          // Add new account
-          console.log(`[USER SERVICE] Adding new TikTok account: ${newAccount.openId}`);
-          mergedAccounts.push(newAccount);
-        }
-      }
-      
-      // Ensure all accounts have proper index values
-      const reindexedAccounts = mergedAccounts.map((account, idx) => ({
-        ...account,
-        index: idx + 1
-      }));
-      
-      console.log(`[USER SERVICE] Final TikTok account count: ${reindexedAccounts.length}`);
-      
-      // Update the user's TikTok accounts
-      user.providerData.tiktok = reindexedAccounts;
-      
-      // Try multiple methods to save TikTok accounts, just like we do for Twitter
-      
-      // 1. First try direct MongoDB update for reliability
-      try {
-        console.log(`[USER SERVICE] Performing direct MongoDB update for TikTok accounts for user ${user._id}`);
-        const mongoose = require('mongoose');
-        const db = mongoose.connection.db;
-        const usersCollection = db.collection('customers');
-        
-        const updateResult = await usersCollection.updateOne(
-          { _id: user._id },
-          { $set: { 'providerData.tiktok': reindexedAccounts, lastLogin: new Date() } }
-        );
-        
-        console.log('[USER SERVICE] Direct TikTok update result:', {
-          acknowledged: updateResult.acknowledged,
-          modifiedCount: updateResult.modifiedCount,
-          matchedCount: updateResult.matchedCount
-        });
-        
-        if (updateResult.acknowledged && updateResult.modifiedCount > 0) {
-          console.log('[USER SERVICE] Direct MongoDB update for TikTok successful');
-          
-          // Get the updated user with a fresh query to verify
-          const updatedUser = await User.findById(user._id);
-          return updatedUser;
-        }
-      } catch (directUpdateError) {
-        console.error('[USER SERVICE] Error with direct MongoDB update for TikTok:', directUpdateError);
-        // Continue to save() method
-      }
-    } 
-    // For Twitter, handle multiple accounts
-    else if (provider === 'twitter') {
-      if (!Array.isArray(tokenData)) {
-        console.warn(`[USER SERVICE] Twitter token data is not an array, converting to array`);
-        tokenData = [tokenData];
-      }
-      
-      console.log(`[USER SERVICE] Processing ${tokenData.length} Twitter accounts for user ${uid}`);
-      
-      // Initialize Twitter array if it doesn't exist
-      if (!user.providerData.twitter) {
-        user.providerData.twitter = [];
-      }
-      
-      // Process each Twitter account
-      for (const account of tokenData) {
-        // Validate required fields
-        if (!account?.accessToken || !account?.accessTokenSecret || !account?.userId) {
-          console.log('[USER SERVICE] Skipping invalid Twitter account (missing required fields):', 
-            JSON.stringify({
-              hasAccessToken: !!account?.accessToken,
-              hasAccessTokenSecret: !!account?.accessTokenSecret,
-              hasUserId: !!account?.userId
-            })
-          );
-          continue; // Skip invalid accounts
-        }
-        
-        // Check if account already exists (by userId)
-        const existingIndex = user.providerData.twitter.findIndex(
-          acc => acc?.userId === account?.userId
-        );
-        
-        const twitterAccount = {
-          accessToken: account?.accessToken,
-          accessTokenSecret: account?.accessTokenSecret,
-          userId: account?.userId,
-          username: account?.username || '',
-          name: account?.name || account?.username || '',
-          profileImageUrl: account?.profileImageUrl || ''
+            tokensUpdatedAt: new Date()
         };
-        
-        console.log(`[USER SERVICE] Processing Twitter account: ${account?.username || account?.userId || 'new account'}`);
-        
-        if (existingIndex >= 0) {
-          // Update existing account
-          console.log(`[USER SERVICE] Updating existing Twitter account for ${account?.username || account?.userId}`);
-          user.providerData.twitter[existingIndex] = {
-            ...user.providerData.twitter[existingIndex],
-            ...twitterAccount
-          };
-        } else {
-          // Add new account
-          console.log(`[USER SERVICE] Adding new Twitter account for ${account?.username || account?.userId || 'unknown user'}`);
-          user.providerData.twitter.push(twitterAccount);
-        }
+        accountMap.set(accountId, accountToAdd);
       }
-      
-      // Try multiple methods to save Twitter accounts
-      
-      // 1. First try direct MongoDB update for reliability
-      try {
-        console.log(`[USER SERVICE] Performing direct MongoDB update for Twitter accounts for user ${user._id}`);
-        const mongoose = require('mongoose');
-        const db = mongoose.connection.db;
-        const usersCollection = db.collection('customers');
-        
-        const updateResult = await usersCollection.updateOne(
-          { _id: user._id },
-          { $set: { 'providerData.twitter': user.providerData.twitter, lastLogin: new Date() } }
-        );
-        
-        console.log('[USER SERVICE] Direct Twitter update result:', {
-          acknowledged: updateResult.acknowledged,
-          modifiedCount: updateResult.modifiedCount,
-          matchedCount: updateResult.matchedCount
-        });
-        
-        if (updateResult.acknowledged && updateResult.modifiedCount > 0) {
-          console.log('[USER SERVICE] Direct MongoDB update for Twitter successful');
-          
-          // Get the updated user with a fresh query to verify
-          const updatedUser = await User.findById(user._id);
-          return updatedUser;
-        }
-      } catch (directUpdateError) {
-        console.error('[USER SERVICE] Error with direct MongoDB update for Twitter:', directUpdateError);
-        // Continue to save() method
-      }
-    } else {
-      // For other providers, just store the token data as is
-      user.providerData[provider] = tokenData;
-    }
-    
-    // Save the updated user with standard Mongoose method
-    try {
-      console.log(`[USER SERVICE] Saving user with standard Mongoose method`);
-      await user.save();
-      console.log(`[USER SERVICE] User saved successfully with social media tokens`);
-      
-      // Return the updated user
-      return user;
-    } catch (saveError) {
-      console.error(`[USER SERVICE] Error saving user:`, saveError);
-      
-      // If save fails, try findOneAndUpdate as a fallback
-      try {
-        console.log(`[USER SERVICE] Trying findOneAndUpdate as fallback after save failure`);
-        const updatedUser = await User.findOneAndUpdate(
-          { _id: user._id },
-          { $set: { [`providerData.${provider}`]: user.providerData[provider] } },
-          { new: true }
-        );
-        
-        if (updatedUser) {
-          console.log(`[USER SERVICE] Fallback update successful`);
-          return updatedUser;
-        } else {
-          throw new Error('Fallback update returned no document');
-        }
-      } catch (fallbackError) {
-        console.error(`[USER SERVICE] Fallback update also failed:`, fallbackError);
-        throw saveError; // Throw original error
-      }
-    }
+    });
+
+    // Convert map back to array and update the user document
+    user.providerData[provider] = Array.from(accountMap.values());
+    user.lastLogin = new Date(); // Update last login time as well
+
+    // Mark the specific path as modified to ensure saving
+    user.markModified(`providerData.${provider}`);
+
+    // Save the user with updated tokens
+    const updatedUser = await user.save();
+
+    console.log(`[USER SERVICE] Successfully updated ${provider} tokens for user ${uid}. Total ${provider} accounts: ${updatedUser.providerData[provider]?.length || 0}`);
+    return updatedUser;
+
   } catch (error) {
     console.error(`[USER SERVICE] Error updating ${provider} tokens for user ${uid}:`, error);
     throw error;
   }
 };
+
+/**
+ * Updates the access and refresh tokens for a specific TikTok account of a user.
+ * @param {string} uid - The Firebase UID of the user.
+ * @param {string} openId - The open_id of the TikTok account to update.
+ * @param {string} newAccessToken - The new access token.
+ * @param {string} newRefreshToken - The new refresh token (optional, might not change).
+ * @returns {Promise<boolean>} - True if update was successful, false otherwise.
+ */
+const updateTikTokTokens = async (uid, openId, newAccessToken, newRefreshToken) => {
+  if (!uid || !openId || !newAccessToken) {
+    console.error('[USER SERVICE - updateTikTokTokens] Missing required arguments.');
+    return false;
+  }
+
+  try {
+    console.log(`[USER SERVICE] Updating TikTok tokens for user ${uid}, account ${openId}`);
+
+    const user = await User.findOne({ uid });
+    if (!user) {
+      console.error(`[USER SERVICE] User not found: ${uid}`);
+      return false;
+    }
+
+    if (!user.providerData?.tiktok || !Array.isArray(user.providerData.tiktok)) {
+      console.error(`[USER SERVICE] User ${uid} has no TikTok accounts array.`);
+      return false;
+    }
+
+    // Find the index of the account to update
+    const accountIndex = user.providerData.tiktok.findIndex(acc => acc.openId === openId);
+
+    if (accountIndex === -1) {
+      console.error(`[USER SERVICE] TikTok account ${openId} not found for user ${uid}.`);
+      return false;
+    }
+
+    // Prepare the update object
+    const updatePathPrefix = `providerData.tiktok.${accountIndex}`;
+    const updateData = {
+      [`${updatePathPrefix}.accessToken`]: newAccessToken,
+      [`${updatePathPrefix}.tokensUpdatedAt`]: new Date()
+    };
+
+    // Only update the refresh token if a new one is provided
+    if (newRefreshToken) {
+      updateData[`${updatePathPrefix}.refreshToken`] = newRefreshToken;
+      console.log('[USER SERVICE] New refresh token provided, updating.');
+    } else {
+       console.log('[USER SERVICE] No new refresh token provided, keeping the old one.');
+    }
+
+
+    // Update the specific account using positional operator or direct update
+    const result = await User.updateOne(
+      { uid: uid, 'providerData.tiktok.openId': openId },
+      { $set: updateData }
+    );
+
+    if (result.modifiedCount === 0 && result.matchedCount === 0) {
+        console.error(`[USER SERVICE] Failed to find user/account to update tokens for ${uid}/${openId}`);
+        return false;
+    }
+     if (result.modifiedCount === 0 && result.matchedCount > 0) {
+        console.warn(`[USER SERVICE] Found user/account ${uid}/${openId} but tokens were already up-to-date.`);
+        // Consider this a success as the tokens are current
+        return true;
+    }
+
+
+    console.log(`[USER SERVICE] Successfully updated TikTok tokens for account ${openId} of user ${uid}.`);
+    return true;
+
+  } catch (error) {
+    console.error(`[USER SERVICE] Error updating TikTok tokens for ${uid}/${openId}:`, error);
+    return false;
+  }
+};
+
 
 /**
  * Remove user's social media connection
@@ -416,25 +337,26 @@ const removeSocialMediaConnection = async (uid, platform) => {
   if (!uid || !platform) {
     throw new Error('User ID and platform are required');
   }
-  
+
   try {
     const updateQuery = {};
     const updatePath = `providerData.${platform}`;
-    updateQuery[updatePath] = null;
-    
+    updateQuery[updatePath] = 1; // Use 1 to signify removal with $unset
+
     const user = await User.findOneAndUpdate(
       { uid },
-      { $unset: updateQuery },
+      { $unset: updateQuery }, // Use $unset to remove the field
       { new: true, runValidators: true }
     );
-    
+
     if (!user) {
       throw new Error('User not found');
     }
-    
+
+    console.log(`[USER SERVICE] Removed ${platform} connection for user ${uid}`);
     return user;
   } catch (error) {
-    console.error(`Error removing ${platform} connection for user ${uid}:`, error);
+    console.error(`[USER SERVICE] Error removing ${platform} connection for user ${uid}:`, error);
     throw error;
   }
 };
@@ -449,53 +371,59 @@ const removeTikTokAccount = async (uid, openId) => {
   if (!uid || !openId) {
     throw new Error('User ID and TikTok open_id are required');
   }
-  
+
   try {
-    // First get the user to check current TikTok accounts
-    const user = await User.findOne({ uid });
-    
-    if (!user) {
-      throw new Error('User not found');
-    }
-    
-    // Get current TikTok accounts
-    const tiktokAccounts = user?.providerData?.tiktok || [];
-    
-    // If no TikTok accounts, nothing to remove
-    if (!Array.isArray(tiktokAccounts) || tiktokAccounts.length === 0) {
-      return user;
-    }
-    
-    console.log('Current TikTok accounts:', JSON.stringify(tiktokAccounts, null, 2));
-    console.log('Removing account with openId:', openId);
-    
-    // Filter out the account to remove
-    const updatedAccounts = tiktokAccounts.filter(account => account?.openId !== openId);
-    
-    // Reindex remaining accounts
-    const reindexedAccounts = updatedAccounts.map((account, idx) => ({
-      ...account,
-      index: idx + 1
-    }));
-    
-    console.log('Filtered and reindexed accounts:', JSON.stringify(reindexedAccounts, null, 2));
-    
-    // Update the user with filtered accounts
-    const updateQuery = {};
-    updateQuery['providerData.tiktok'] = reindexedAccounts.length > 0 ? reindexedAccounts : null;
-    
-    // If there are no more accounts, unset the field, otherwise update with remaining accounts
-    const operation = reindexedAccounts.length > 0 ? { $set: updateQuery } : { $unset: { 'providerData.tiktok': 1 } };
-    
+    console.log(`[USER SERVICE] Attempting to remove TikTok account ${openId} for user ${uid}`);
+
+    // Use findOneAndUpdate with $pull to remove the specific account
     const updatedUser = await User.findOneAndUpdate(
       { uid },
-      operation,
-      { new: true, runValidators: true }
+      { $pull: { 'providerData.tiktok': { openId: openId } } },
+      { new: true } // Return the updated document
     );
-    
+
+    if (!updatedUser) {
+      console.error(`[USER SERVICE] User not found: ${uid}`);
+      throw new Error('User not found');
+    }
+
+    // Check if the account was actually removed
+    const accountExists = updatedUser.providerData?.tiktok?.some(acc => acc.openId === openId);
+    if (accountExists) {
+      console.error(`[USER SERVICE] Failed to remove TikTok account ${openId}. It still exists.`);
+      // Potentially try another method or log more info
+      // For now, we'll rely on the $pull operation
+      // Maybe trigger a re-fetch/re-sync?
+       const finalUser = await User.findOne({ uid }); // Re-fetch
+        if(finalUser?.providerData?.tiktok?.some(acc => acc.openId === openId)) {
+            console.error("[USER SERVICE] Account still present after refetch. Manual intervention might be needed.");
+        } else {
+             console.log("[USER SERVICE] Refetch confirmed account removal.");
+        }
+
+
+    } else {
+      console.log(`[USER SERVICE] Successfully removed TikTok account ${openId} for user ${uid}`);
+      // Re-index remaining accounts if needed (optional)
+      if (updatedUser.providerData?.tiktok && updatedUser.providerData.tiktok.length > 0) {
+        updatedUser.providerData.tiktok.forEach((acc, index) => {
+          acc.index = index + 1;
+        });
+        await updatedUser.save();
+        console.log(`[USER SERVICE] Re-indexed remaining ${updatedUser.providerData.tiktok.length} TikTok accounts.`);
+      }
+       // If the array is now empty, remove it completely
+        if (updatedUser.providerData?.tiktok?.length === 0) {
+            console.log("[USER SERVICE] TikTok accounts array is empty, removing it.");
+            await User.updateOne({ uid }, { $unset: { 'providerData.tiktok': 1 } });
+        }
+
+
+    }
+
     return updatedUser;
   } catch (error) {
-    console.error(`Error removing TikTok account for user ${uid}:`, error);
+    console.error(`[USER SERVICE] Error removing TikTok account ${openId} for user ${uid}:`, error);
     throw error;
   }
 };
@@ -510,62 +438,34 @@ const removeTwitterAccount = async (uid, userId) => {
   if (!uid || !userId) {
     throw new Error('User ID and Twitter user_id are required');
   }
-  
+
   try {
-    console.log(`[removeTwitterAccount] Starting removal of Twitter account ${userId} for user ${uid}`);
-    
-    // First get the user
-    const user = await User.findOne({ uid });
-    
-    if (!user) {
-      console.error(`[removeTwitterAccount] User not found with uid: ${uid}`);
+    console.log(`[USER SERVICE] Removing Twitter account ${userId} for user ${uid}`);
+
+    const updatedUser = await User.findOneAndUpdate(
+      { uid },
+      { $pull: { 'providerData.twitter': { userId: userId } } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
       throw new Error('User not found');
     }
-    
-    console.log(`[removeTwitterAccount] Found user: ${user._id}`);
-    
-    // Check if user has Twitter accounts
-    if (!user.providerData || !user.providerData.twitter || !Array.isArray(user.providerData.twitter)) {
-      console.log(`[removeTwitterAccount] User has no Twitter accounts`);
-      return user;
+
+     // If the array is now empty, remove it completely
+    if (updatedUser.providerData?.twitter?.length === 0) {
+        console.log("[USER SERVICE] Twitter accounts array is empty, removing it.");
+        await User.updateOne({ uid }, { $unset: { 'providerData.twitter': 1 } });
     }
-    
-    // Log current Twitter accounts
-    console.log(`[removeTwitterAccount] User has ${user.providerData.twitter.length} Twitter accounts before removal`);
-    console.log(`[removeTwitterAccount] Looking for Twitter account with userId: ${userId}`);
-    
-    // Find the account to remove
-    const accountIndex = user.providerData.twitter.findIndex(acc => acc.userId === userId);
-    
-    if (accountIndex === -1) {
-      console.log(`[removeTwitterAccount] Twitter account ${userId} not found in user's accounts`);
-      return user;
-    }
-    
-    console.log(`[removeTwitterAccount] Found Twitter account at index ${accountIndex}`);
-    
-    // Remove the account directly using splice
-    const removedAccount = user.providerData.twitter.splice(accountIndex, 1)[0];
-    console.log(`[removeTwitterAccount] Removed account:`, removedAccount);
-    
-    // If no Twitter accounts left, remove the Twitter array completely
-    if (user.providerData.twitter.length === 0) {
-      console.log(`[removeTwitterAccount] No Twitter accounts left, removing Twitter array`);
-      delete user.providerData.twitter;
-    } else {
-      console.log(`[removeTwitterAccount] ${user.providerData.twitter.length} Twitter accounts remaining`);
-    }
-    
-    // Save the updated user
-    await user.save();
-    console.log(`[removeTwitterAccount] User saved successfully`);
-    
-    return user;
+
+    console.log(`[USER SERVICE] Successfully removed Twitter account ${userId} for user ${uid}`);
+    return updatedUser;
   } catch (error) {
-    console.error(`[removeTwitterAccount] Error removing Twitter account for user ${uid}:`, error);
+    console.error(`[USER SERVICE] Error removing Twitter account ${userId} for user ${uid}:`, error);
     throw error;
   }
 };
+
 
 /**
  * Create a new user
@@ -575,7 +475,7 @@ const removeTwitterAccount = async (uid, userId) => {
 const createUser = async (userData) => {
   try {
     const { uid, email, displayName, photoURL } = userData;
-    
+
     // Create basic user with default settings
     const user = new User({
       uid,
@@ -584,9 +484,10 @@ const createUser = async (userData) => {
       photoURL: photoURL || '',
       role: 'Starter',
       createdAt: new Date(),
-      lastLogin: new Date()
+      lastLogin: new Date(),
+      providerData: {} // Initialize providerData
     });
-    
+
     await user.save();
     return user;
   } catch (error) {
@@ -594,54 +495,6 @@ const createUser = async (userData) => {
     throw error;
   }
 };
-
-// Add a new function to update TikTok tokens after they've been refreshed
-async function updateTikTokTokens(uid, openId, newAccessToken, newRefreshToken) {
-  try {
-    console.log(`Updating TikTok tokens for user ${uid} account ${openId}`);
-    
-    // Find the user by uid
-    const User = require('../models/User');
-    const user = await User.findOne({ uid });
-    
-    if (!user) {
-      console.error(`User not found with uid: ${uid}`);
-      throw new Error('User not found');
-    }
-    
-    // Find the specific TikTok account to update
-    if (!user.providerData || !user.providerData.tiktok || !Array.isArray(user.providerData.tiktok)) {
-      console.error(`User ${uid} has no TikTok accounts`);
-      throw new Error('User has no TikTok accounts');
-    }
-    
-    const accountIndex = user.providerData.tiktok.findIndex(account => account.openId === openId);
-    
-    if (accountIndex === -1) {
-      console.error(`TikTok account ${openId} not found for user ${uid}`);
-      throw new Error('TikTok account not found');
-    }
-    
-    // Update the tokens
-    user.providerData.tiktok[accountIndex].accessToken = newAccessToken;
-    
-    if (newRefreshToken) {
-      user.providerData.tiktok[accountIndex].refreshToken = newRefreshToken;
-    }
-    
-    // Add a timestamp for when tokens were last updated
-    user.providerData.tiktok[accountIndex].tokensUpdatedAt = new Date();
-    
-    // Save the user
-    await user.save();
-    
-    console.log(`Successfully updated TikTok tokens for user ${uid} account ${openId}`);
-    return true;
-  } catch (error) {
-    console.error(`Error updating TikTok tokens: ${error.message}`);
-    throw error;
-  }
-}
 
 module.exports = {
   createOrUpdateUser,
@@ -654,5 +507,5 @@ module.exports = {
   removeTikTokAccount,
   removeTwitterAccount,
   createUser,
-  updateTikTokTokens
-}; 
+  updateTikTokTokens // Export the new function
+};

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
 const { processPost, checkUserLimits } = require('../services/scheduler');
-const { hasReachedLimit } = require('../utils/roleLimits');
+const { hasReachedLimit, getLimit } = require('../utils/roleLimits');
 const User = require('../models/User');
 const userService = require('../services/userService');
 
@@ -121,80 +121,108 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Initialize platforms if not provided
-    const platformsToCheck = platforms || [];
+    // Get user data for role and limits
+    const user = await User.findOne({ uid: userId });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    const userRole = user.role || 'Starter';
+    const now = new Date();
 
-    // Check user limits if scheduling posts
-    if (isScheduled) {
-      try {
-        // Check limits for scheduled posts
-        const limitCheck = await checkUserLimits(userId, 'scheduled');
-        if (!limitCheck.allowed) {
-          return res.status(403).json({
-            success: false,
-            error: limitCheck.message || 'You have reached the maximum number of scheduled posts for your plan'
-          });
-        }
-        
-        // Validate scheduled date
-        if (!scheduledDate) {
-          return res.status(400).json({
-            success: false,
-            error: 'Scheduled date is required for scheduled posts'
-          });
-        }
-        
-        // Check that the scheduled date is in the future
-        const scheduledDateTime = new Date(scheduledDate);
-        const now = new Date();
-        
-        if (scheduledDateTime <= now) {
-          return res.status(400).json({
-            success: false,
-            error: 'Scheduled date must be in the future'
-          });
-        }
-      } catch (error) {
-        console.error('Error checking user limits:', error);
-        // Continue processing even if there's an error checking limits
+    // Check and potentially reset Starter plan post count
+    if (userRole === 'Starter') {
+      const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+      let cycleStartDate = user.cycleStartDate;
+      
+      // If no cycle start date or it's older than 30 days, reset
+      if (!cycleStartDate || (now.getTime() - cycleStartDate.getTime() > cycleDuration)) {
+        console.log(`Resetting post count for Starter user ${userId}`);
+        user.postsThisCycle = 0;
+        user.cycleStartDate = now;
+        // Save immediately to avoid race conditions? Or save at the end. Save at the end for now.
       }
     }
 
-    // Check social accounts limit
-    if (platformsToCheck.includes('tiktok') || platformsToCheck.includes('twitter')) {
-      const user = await User.findOne({ uid: userId });
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
+    // Check Post/Schedule Limits
+    const limitType = isScheduled ? 'scheduledPosts' : 'postsThisCycle'; // Use postsThisCycle for non-scheduled Starter
+    const limit = getLimit(userRole, 'scheduledPosts'); // All posts count towards the 'scheduledPosts' limit conceptually
+
+    // Check if limit is reached
+    let currentCount = 0;
+    if (userRole === 'Starter') {
+        currentCount = user.postsThisCycle || 0;
+    } else if (isScheduled) {
+        // For paid plans, only check scheduled post count
+        currentCount = await Post.countDocuments({
+            userId,
+            isScheduled: true,
+            status: 'pending' 
         });
+    } // For paid plans, non-scheduled posts are unlimited (or follow 'scheduledPosts' if it's not -1)
+
+    if (limit !== -1 && currentCount >= limit) {
+      let errorMessage = `You have reached the maximum of ${limit} posts for your ${userRole} plan.`;
+      if (userRole === 'Starter') {
+          const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+          const resetTime = user.cycleStartDate ? new Date(user.cycleStartDate.getTime() + cycleDuration) : null;
+          errorMessage = `You have reached the maximum of ${limit} posts for the free Starter plan this cycle. Your limit resets on ${resetTime ? resetTime.toLocaleDateString() : 'your next cycle'}.`;
+      } else if (isScheduled) {
+          errorMessage = `You have reached the maximum of ${limit} scheduled posts for your ${userRole} plan.`
+      }
+      
+      return res.status(403).json({
+        success: false,
+        error: errorMessage,
+        limit: limit,
+        current: currentCount
+      });
+    }
+
+    // Validate scheduled date if scheduling
+    if (isScheduled) {
+      if (!scheduledDate) {
+        return res.status(400).json({
+          success: false,
+          error: 'Scheduled date is required for scheduled posts'
+        });
+      }
+      const scheduledDateTime = new Date(scheduledDate);
+      if (scheduledDateTime <= now) {
+        return res.status(400).json({
+          success: false,
+          error: 'Scheduled date must be in the future'
+        });
+      }
+    }
+
+    // Check social accounts limit (keep existing logic - slightly modified to use user object)
+    const platformsToCheck = platforms || [];
+    if (platformsToCheck.length > 0) {
+      // Count currently connected accounts ONCE
+      let connectedAccountsCount = 0;
+      if (user.providerData?.tiktok) {
+        connectedAccountsCount += user.providerData.tiktok.length;
+      }
+      if (user.providerData?.twitter) {
+        // Check if twitter is array or object
+        if (Array.isArray(user.providerData.twitter)) {
+          connectedAccountsCount += user.providerData.twitter.length;
+        } else if (user.providerData.twitter) { // Check if it exists and is truthy
+          connectedAccountsCount += 1; 
+        }
       }
 
-      // Count social accounts
-      let socialAccountsCount = 0;
-      
-      // Count TikTok accounts
-      if (tiktok_accounts && Array.isArray(tiktok_accounts)) {
-        socialAccountsCount += tiktok_accounts.length;
-      } else if (tiktok_access_token) {
-        socialAccountsCount += 1;
-      }
-      
-      // Count Twitter accounts
-      if (twitter_accounts && Array.isArray(twitter_accounts)) {
-        socialAccountsCount += twitter_accounts.length;
-      } else if (twitter_access_token) {
-        socialAccountsCount += 1;
-      }
-      
-      // Check if user has reached their limit
-      if (hasReachedLimit(user.role || 'Starter', 'socialAccounts', socialAccountsCount)) {
-        return res.status(403).json({
-          success: false,
-          error: 'Social accounts limit reached',
-          limit: user.role === 'Starter' ? 5 : (user.role === 'Launch' ? 15 : (user.role === 'Rise' ? 30 : 'unlimited')),
-          current: socialAccountsCount
-        });
+      if (hasReachedLimit(userRole, 'socialAccounts', connectedAccountsCount)) {
+         const accountLimit = getLimit(userRole, 'socialAccounts');
+         return res.status(403).json({
+           success: false,
+           error: `You have reached the maximum of ${accountLimit} social accounts for your ${userRole} plan. Please upgrade or remove an account.`,
+           limit: accountLimit,
+           current: connectedAccountsCount
+         });
       }
     }
 
@@ -395,6 +423,14 @@ router.post('/', async (req, res) => {
     // Set status based on whether it's scheduled
     postData.status = isScheduled ? 'pending' : 'completed';
     
+    // Increment post count for Starter plan AFTER successful post creation
+    if (userRole === 'Starter') {
+      user.postsThisCycle = (user.postsThisCycle || 0) + 1;
+    }
+    
+    // Save user changes (cycle start date and post count)
+    await user.save();
+
     // Create and save the post
     console.log('Saving post to database...');
     const newPost = new Post(postData);

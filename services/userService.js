@@ -1,5 +1,7 @@
 // File: services/userService.js
 const User = require('../models/User');
+const { hasReachedLimit, getLimit } = require('../utils/roleLimits'); // Import limit utils
+const userService = require('./userService');
 
 /**
  * Create or update a user in the database
@@ -168,17 +170,22 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
   console.log(`[USER SERVICE] Processing ${accountsToProcess.length} ${provider} account(s)`);
 
   try {
-    // Find user, creating if necessary (more robust than just findOne)
+    // Find user first to check limits BEFORE making changes
     let user = await User.findOne({ uid });
     if (!user) {
+      // Create user if not exists - handle the case where this is the first interaction
       console.log(`[USER SERVICE] User ${uid} not found, creating new user.`);
       user = new User({
         uid,
-        email: `user-${uid.substring(0, 8)}@example.com`, // Placeholder email
-        displayName: `User ${uid.substring(0, 8)}`, // Placeholder name
-        providerData: {} // Initialize providerData
+        email: `user-${uid.substring(0, 8)}@example.com`, 
+        displayName: `User ${uid.substring(0, 8)}`,
+        providerData: {}
       });
-      // Note: No save() here yet, it happens during the update below
+      // Initial save is needed before we can add provider data
+      await user.save(); 
+      console.log(`[USER SERVICE] New user ${uid} created.`);
+      // Re-fetch to ensure we have the Mongoose object
+      user = await User.findOne({ uid }); 
     }
 
     // Ensure providerData exists
@@ -190,44 +197,61 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
       user.providerData[provider] = [];
     }
 
-    const existingAccounts = user.providerData[provider];
-    const accountMap = new Map(existingAccounts.map(acc => [acc.openId || acc.userId, acc])); // Use openId for TikTok, userId for Twitter
+    const userRole = user.role || 'Starter';
+    const accountLimit = getLimit(userRole, 'socialAccounts');
 
-    accountsToProcess.forEach(newAccount => {
+    const existingAccounts = user.providerData[provider];
+    const otherProvider = provider === 'tiktok' ? 'twitter' : 'tiktok';
+    const existingOtherAccounts = user.providerData[otherProvider] || [];
+    
+    let currentTotalAccounts = existingAccounts.length + (Array.isArray(existingOtherAccounts) ? existingOtherAccounts.length : (existingOtherAccounts ? 1 : 0));
+    
+    const accountMap = new Map(existingAccounts.map(acc => [acc.openId || acc.userId, acc]));
+    let addedCount = 0;
+
+    for (const newAccount of accountsToProcess) {
       const accountId = newAccount.openId || newAccount.userId; // Identifier
       if (!accountId) {
         console.warn(`[USER SERVICE] Skipping account for provider ${provider} due to missing ID:`, newAccount);
-        return;
+        continue; // Use continue instead of return to process other accounts
       }
 
       // Basic validation for required tokens
       if (provider === 'tiktok' && (!newAccount.accessToken || !newAccount.openId)) {
          console.warn(`[USER SERVICE] Skipping TikTok account ${accountId}: Missing accessToken or openId.`);
-         return;
+         continue;
       }
        if (provider === 'twitter' && (!newAccount.accessToken || !newAccount.accessTokenSecret || !newAccount.userId)) {
          console.warn(`[USER SERVICE] Skipping Twitter account ${accountId}: Missing required tokens or userId.`);
-         return;
+         continue;
        }
 
       if (accountMap.has(accountId)) {
-        // Update existing account
+        // Update existing account - doesn't count towards limit check here
         console.log(`[USER SERVICE] Updating existing ${provider} account: ${accountId}`);
         const existingAccount = accountMap.get(accountId);
-        // Merge new data, potentially overwriting tokens
         Object.assign(existingAccount, newAccount, { tokensUpdatedAt: new Date() });
+        accountMap.set(accountId, existingAccount); // Ensure map is updated
       } else {
+        // Check limit BEFORE adding a NEW account
+        if (accountLimit !== -1 && currentTotalAccounts >= accountLimit) {
+           console.warn(`[USER SERVICE] Account limit reached for user ${uid} (${userRole}). Limit: ${accountLimit}, Current: ${currentTotalAccounts}. Cannot add new ${provider} account ${accountId}.`);
+           // Optionally throw an error or return a specific status
+           throw new Error(`Account limit reached (${accountLimit}). Cannot add new ${provider} account.`);
+        }
+        
         // Add new account
         console.log(`[USER SERVICE] Adding new ${provider} account: ${accountId}`);
-        // Ensure essential fields exist
         const accountToAdd = {
             ...(provider === 'tiktok' ? { openId: accountId } : { userId: accountId }),
             ...newAccount,
             tokensUpdatedAt: new Date()
         };
         accountMap.set(accountId, accountToAdd);
+        currentTotalAccounts++; // Increment count after deciding to add
+        addedCount++;
       }
-    });
+    } // End of forEach loop
 
     // Convert map back to array and update the user document
     user.providerData[provider] = Array.from(accountMap.values());
@@ -239,12 +263,17 @@ const updateSocialMediaTokens = async (uid, provider, tokenData) => {
     // Save the user with updated tokens
     const updatedUser = await user.save();
 
-    console.log(`[USER SERVICE] Successfully updated ${provider} tokens for user ${uid}. Total ${provider} accounts: ${updatedUser.providerData[provider]?.length || 0}`);
+    console.log(`[USER SERVICE] Successfully updated ${provider} tokens for user ${uid}. Added ${addedCount} new account(s). Total ${provider} accounts: ${updatedUser.providerData[provider]?.length || 0}`);
     return updatedUser;
 
   } catch (error) {
     console.error(`[USER SERVICE] Error updating ${provider} tokens for user ${uid}:`, error);
-    throw error;
+    // Re-throw the specific limit error if it occurred
+    if (error.message.startsWith('Account limit reached')) {
+        throw error; 
+    }
+    // Throw a generic error for other issues
+    throw new Error(`Failed to update ${provider} accounts: ${error.message}`);
   }
 };
 

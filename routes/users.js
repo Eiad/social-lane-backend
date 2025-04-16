@@ -567,7 +567,6 @@ router.get('/:uid/limits', async (req, res) => {
   try {
     const { uid } = req.params;
     
-    // Find the user
     const user = await User.findOne({ uid });
     if (!user) {
       return res.status(404).json({
@@ -576,19 +575,57 @@ router.get('/:uid/limits', async (req, res) => {
       });
     }
     
-    // Get the user's role - default to Starter if not found
     const role = user.role || 'Starter';
+    const now = new Date(); // Get current time
     
-    // Get limits and features for the user's role
+    // Calculate current counts
+    let currentSocialAccounts = 0;
+    if (user.providerData?.tiktok) {
+        currentSocialAccounts += user.providerData.tiktok.length;
+    }
+    if (user.providerData?.twitter) {
+        if (Array.isArray(user.providerData.twitter)) {
+            currentSocialAccounts += user.providerData.twitter.length;
+        } else { // Handle single account object case
+            currentSocialAccounts += 1;
+        }
+    }
+
+    let currentPostsThisCycle = user.postsThisCycle || 0;
+    let cycleStartDate = user.cycleStartDate;
+    let cycleEndDate = null;
+
+    // Reset Starter cycle if needed (ensure consistency)
+    if (role === 'Starter') {
+      const cycleDuration = 30 * 24 * 60 * 60 * 1000;
+      if (!cycleStartDate || (now.getTime() - cycleStartDate.getTime() > cycleDuration)) {
+        console.log(`[LIMITS] Resetting post count for Starter user ${uid} within limits check.`);
+        currentPostsThisCycle = 0;
+        cycleStartDate = now;
+        // Note: We don't save the user here, just return the reset values
+        // The post route will handle the actual saving
+      }
+      if (cycleStartDate) {
+          cycleEndDate = new Date(cycleStartDate.getTime() + cycleDuration);
+      }
+    }
+    
+    // Get limits and features
     const limits = {
+      role: role,
       socialAccounts: getLimit(role, 'socialAccounts'),
+      currentSocialAccounts: currentSocialAccounts, 
       scheduledPosts: getLimit(role, 'scheduledPosts'),
+      // For Starter, return posts used in *this* cycle
+      // For others, return the limit (as it's typically unlimited or high)
+      currentPostsCount: role === 'Starter' ? currentPostsThisCycle : getLimit(role, 'scheduledPosts'),
+      cycleStartDate: role === 'Starter' ? cycleStartDate : null,
+      cycleEndDate: role === 'Starter' ? cycleEndDate : null,
       hasContentStudio: hasFeature(role, 'contentStudio'),
       hasCarouselPosts: hasFeature(role, 'carouselPosts'),
       growthConsulting: getLimit(role, 'growthConsulting'),
       analyticsLevel: getLimit(role, 'analyticsLevel'),
-      teamMembers: getLimit(role, 'teamMembers'),
-      role: role
+      teamMembers: getLimit(role, 'teamMembers')
     };
     
     res.status(200).json({

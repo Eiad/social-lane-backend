@@ -338,12 +338,12 @@ router.post('/:uid/cancel-subscription', async (req, res) => {
     try {
       // Call PayPal to cancel the subscription
       const response = await fetch(
-        `${PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}/cancel`,
+        `${process.env.PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}/cancel`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${await getAccessToken()}`
+            Authorization: `Bearer ${await paypalService.getAccessToken()}`
           },
           body: JSON.stringify({
             reason: 'Cancelled by user'
@@ -353,12 +353,12 @@ router.post('/:uid/cancel-subscription', async (req, res) => {
 
       // Get subscription details to determine end date
       const subscriptionDetails = await fetch(
-        `${PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}`,
+        `${process.env.PAYPAL_API_URL}/v1/billing/subscriptions/${paypalSubscriptionId}`,
         {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${await getAccessToken()}`
+            Authorization: `Bearer ${await paypalService.getAccessToken()}`
           }
         }
       ).then(res => res.json());

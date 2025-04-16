@@ -124,6 +124,15 @@ const UserSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
     default: Date.now
+  },
+  // Track posts within the current cycle (especially for Starter)
+  postsThisCycle: {
+    type: Number,
+    default: 0
+  },
+  // Track the start date of the current posting cycle (especially for Starter)
+  cycleStartDate: {
+    type: Date
   }
 }, {
   timestamps: true

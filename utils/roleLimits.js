@@ -4,8 +4,8 @@
  */
 const roleLimits = {
   Starter: {
-    socialAccounts: 5,
-    scheduledPosts: 30,
+    socialAccounts: 1,
+    scheduledPosts: 1,
     carouselPosts: true,
     contentStudio: false,
     growthConsulting: false,

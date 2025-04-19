@@ -249,8 +249,62 @@ app.post('/social/tiktok/post', postingLimiter, async (req, res) => {
     hasVideoUrl: !!req.body?.videoUrl,
     hasAccounts: Array.isArray(req.body?.accounts) && req.body?.accounts.length > 0,
     hasCaption: !!req.body?.caption,
-    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0
+    accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0,
+    userId: req.body?.userId ? `${req.body.userId.substring(0, 6)}...` : undefined
   });
+
+  // Check user roles and limits
+  if (req.body?.userId) {
+    try {
+      const { hasReachedLimit, getLimit } = require('./utils/roleLimits');
+      const userService = require('./services/userService');
+      
+      // Get post usage to check limits
+      const postUsage = await userService.getPostUsage(req.body.userId);
+      
+      if (!postUsage.success) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found or error retrieving user data'
+        });
+      }
+      
+      const userRole = postUsage.userRole;
+      
+      // Check post limits for Starter users
+      if (userRole === 'Starter') {
+        console.log(`[SOCIAL/TIKTOK/POST] Checking post limits for Starter user ${req.body.userId}. Current count: ${postUsage.currentPostCount}, Limit: ${postUsage.limit}, Remaining: ${postUsage.postsRemaining}, Needs Reset: ${postUsage.needsCycleReset}`);
+        // If user has no posts remaining, return error
+        if (postUsage.postsRemaining !== -1 && postUsage.postsRemaining <= 0 && !postUsage.needsCycleReset) {
+          console.log(`[SOCIAL/TIKTOK/POST] Post limit reached for user ${req.body.userId}.`);
+          return res.status(403).json({
+            success: false,
+            error: `You have reached the maximum of ${postUsage.limit} posts for the free Starter plan this cycle. Your limit resets on ${new Date(postUsage.nextResetDate).toLocaleDateString()}.`,
+            limit: postUsage.limit,
+            current: postUsage.currentPostCount,
+            nextReset: postUsage.nextResetDate
+          });
+        }
+      }
+      
+      // Check social account limits
+      if (req.body?.accounts && Array.isArray(req.body.accounts)) {
+        const requestedAccountsCount = req.body.accounts.length;
+        const accountLimit = getLimit(userRole, 'socialAccounts');
+        
+        if (accountLimit !== -1 && requestedAccountsCount > accountLimit) {
+          return res.status(403).json({
+            success: false,
+            error: `Your ${userRole} plan allows posting to ${accountLimit} social account(s) at a time. Please upgrade your plan or select fewer accounts.`,
+            limit: accountLimit,
+            requested: requestedAccountsCount
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[SOCIAL/TIKTOK/POST] Error checking user limits:', error);
+    }
+  }
   
   // Handle multiple accounts case with our new endpoint
   if (req.body?.accounts && Array.isArray(req.body.accounts) && req.body.accounts.length > 0) {
@@ -264,7 +318,8 @@ app.post('/social/tiktok/post', postingLimiter, async (req, res) => {
         data: {
           videoUrl: req.body.videoUrl || '',
           caption: req.body.caption || '',
-          accounts: req.body.accounts
+          accounts: req.body.accounts,
+          userId: req.body.userId
         },
         headers: {
           'Content-Type': 'application/json'
@@ -285,7 +340,7 @@ app.post('/social/tiktok/post', postingLimiter, async (req, res) => {
         details: errorMessage 
       });
     }
-  } 
+  }
   // Handle single account cases (legacy format or direct access token)
   else {
     // Transform the payload to match what tiktok/post-video expects
@@ -351,8 +406,69 @@ app.post('/social/twitter/post', async (req, res) => {
     hasAccounts: Array.isArray(req.body?.accounts) && req.body?.accounts.length > 0,
     hasText: !!req.body?.text,
     accountsCount: Array.isArray(req.body?.accounts) ? req.body.accounts.length : 0,
-    userId: req.body?.userId ? req.body.userId.substring(0, 5) + '...' : 'missing'
+    userId: req.body?.userId ? `${req.body.userId.substring(0, 6)}...` : undefined
   });
+  
+  // Check user roles and limits
+  if (req.body?.userId) {
+    try {
+      const { hasReachedLimit, getLimit } = require('./utils/roleLimits');
+      const userService = require('./services/userService');
+      
+      // Get post usage to check limits
+      const postUsage = await userService.getPostUsage(req.body.userId);
+      
+      if (!postUsage.success) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found or error retrieving user data'
+        });
+      }
+      
+      const userRole = postUsage.userRole;
+      
+      // Check post limits for Starter users
+      if (userRole === 'Starter') {
+        console.log(`[SOCIAL/TWITTER/POST] Checking post limits for Starter user ${req.body.userId}. Current count: ${postUsage.currentPostCount}, Limit: ${postUsage.limit}, Remaining: ${postUsage.postsRemaining}, Needs Reset: ${postUsage.needsCycleReset}`);
+        // If user has no posts remaining, return error
+        if (postUsage.postsRemaining !== -1 && postUsage.postsRemaining <= 0 && !postUsage.needsCycleReset) {
+           console.log(`[SOCIAL/TWITTER/POST] Post limit reached for user ${req.body.userId}.`);
+           return res.status(403).json({
+            success: false,
+            error: `You have reached the maximum of ${postUsage.limit} posts for the free Starter plan this cycle. Your limit resets on ${new Date(postUsage.nextResetDate).toLocaleDateString()}.`,
+            limit: postUsage.limit,
+            current: postUsage.currentPostCount,
+            nextReset: postUsage.nextResetDate
+          });
+        }
+      }
+      
+      // Check social account limits
+      if (req.body?.accounts && Array.isArray(req.body.accounts)) {
+        const requestedAccountsCount = req.body.accounts.length;
+        const accountLimit = getLimit(userRole, 'socialAccounts');
+        
+        if (accountLimit !== -1 && requestedAccountsCount > accountLimit) {
+          return res.status(403).json({
+            success: false,
+            error: `Your ${userRole} plan allows posting to ${accountLimit} social account(s) at a time. Please upgrade your plan or select fewer accounts.`,
+            limit: accountLimit,
+            requested: requestedAccountsCount
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[SOCIAL/TWITTER/POST] Error checking user limits:', error);
+    }
+  }
+  
+  // Account details for log
+  if (req.body?.accounts && Array.isArray(req.body.accounts)) {
+    console.log('Account details:', req.body.accounts.map(acc => ({
+      userId: acc.userId,
+      username: acc.username || 'no username'
+    })));
+  }
   
   if (!req.body) {
     console.error('Request body is empty or missing');
@@ -360,14 +476,6 @@ app.post('/social/twitter/post', async (req, res) => {
       error: 'Missing request body',
       details: 'The request body is required but was not provided'
     });
-  }
-  
-  // Log more detailed account information for debugging
-  if (req.body?.accounts && Array.isArray(req.body.accounts)) {
-    console.log('Account details:', req.body.accounts.map(acc => ({
-      userId: acc.userId || 'missing',
-      username: acc.username || 'no username'
-    })));
   }
   
   // Handle multiple accounts case with our new endpoint

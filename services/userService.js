@@ -525,6 +525,148 @@ const createUser = async (userData) => {
   }
 };
 
+/**
+ * Increment post count for a user and handle cycle reset if needed
+ * @param {string} userId - Firebase UID of the user
+ * @returns {Promise<Object>} - Object containing success flag, updated post count, and cycle info
+ */
+const incrementPostCount = async (userId) => {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const user = await User.findOne({ uid: userId });
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const userRole = user.role || 'Starter';
+    const now = new Date();
+    let cycleReset = false;
+    let postsRemaining = null;
+
+    // Only track posts for Starter plan users
+    if (userRole === 'Starter') {
+      const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+      let cycleStartDate = user.cycleStartDate;
+      let currentCount = user.postsThisCycle || 0;
+      
+      // Reset cycle if needed
+      if (!cycleStartDate || (now.getTime() - cycleStartDate.getTime() > cycleDuration)) {
+        console.log(`[USER SERVICE] Resetting post count for Starter user ${userId}`);
+        user.postsThisCycle = 0;
+        user.cycleStartDate = now;
+        currentCount = 0;
+        cycleReset = true;
+      }
+      
+      // Increment post count
+      user.postsThisCycle = currentCount + 1;
+      console.log(`[USER SERVICE] Incremented post count for user ${userId} to ${user.postsThisCycle}`);
+      
+      // Get the limit from roleLimits
+      const { getLimit } = require('../utils/roleLimits');
+      const postLimit = getLimit(userRole, 'numberOfPosts');
+      
+      // Calculate remaining posts
+      postsRemaining = postLimit === -1 ? -1 : Math.max(0, postLimit - user.postsThisCycle);
+      
+      // Save the updated user document
+      await user.save();
+      
+      return {
+        success: true,
+        currentPostCount: user.postsThisCycle,
+        postsRemaining: postsRemaining,
+        cycleStartDate: user.cycleStartDate,
+        cycleReset: cycleReset,
+        nextResetDate: new Date(user.cycleStartDate.getTime() + cycleDuration)
+      };
+    }
+    
+    // For paid plans, we don't track post count
+    return {
+      success: true,
+      currentPostCount: null,
+      postsRemaining: -1, // -1 indicates unlimited
+      userRole: userRole
+    };
+  } catch (error) {
+    console.error('Error incrementing post count:', error?.message);
+    return {
+      success: false,
+      error: error?.message || 'Failed to increment post count'
+    };
+  }
+};
+
+/**
+ * Get the current post usage for a user
+ * @param {string} userId - Firebase UID of the user
+ * @returns {Promise<Object>} - Object containing post usage information
+ */
+const getPostUsage = async (userId) => {
+  try {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const user = await User.findOne({ uid: userId });
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const userRole = user.role || 'Starter';
+    const now = new Date();
+    
+    // Only track posts for Starter plan users
+    if (userRole === 'Starter') {
+      const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+      let cycleStartDate = user.cycleStartDate || now;
+      let currentCount = user.postsThisCycle || 0;
+      
+      // Check if cycle needs reset (but don't reset it here, just report)
+      const needsReset = !cycleStartDate || (now.getTime() - cycleStartDate.getTime() > cycleDuration);
+      
+      // Get the limit from roleLimits
+      const { getLimit } = require('../utils/roleLimits');
+      const postLimit = getLimit(userRole, 'numberOfPosts');
+      
+      // Calculate remaining posts
+      const postsRemaining = postLimit === -1 ? -1 : Math.max(0, postLimit - currentCount);
+      
+      return {
+        success: true,
+        currentPostCount: needsReset ? 0 : currentCount,
+        postsRemaining: needsReset ? postLimit : postsRemaining,
+        limit: postLimit,
+        cycleStartDate: needsReset ? now : cycleStartDate,
+        nextResetDate: needsReset ? 
+          new Date(now.getTime() + cycleDuration) : 
+          new Date(cycleStartDate.getTime() + cycleDuration),
+        needsCycleReset: needsReset,
+        userRole: userRole
+      };
+    }
+    
+    // For paid plans
+    return {
+      success: true,
+      currentPostCount: null,
+      postsRemaining: -1, // -1 indicates unlimited
+      limit: -1,
+      userRole: userRole
+    };
+  } catch (error) {
+    console.error('Error getting post usage:', error?.message);
+    return {
+      success: false,
+      error: error?.message || 'Failed to get post usage'
+    };
+  }
+};
+
 module.exports = {
   createOrUpdateUser,
   getUserByUid,
@@ -536,5 +678,7 @@ module.exports = {
   removeTikTokAccount,
   removeTwitterAccount,
   createUser,
-  updateTikTokTokens // Export the new function
+  updateTikTokTokens,
+  incrementPostCount,
+  getPostUsage
 };

@@ -4,54 +4,35 @@
  */
 const roleLimits = {
   Starter: {
-    socialAccounts: 1,
-    scheduledPosts: 1,
+    socialAccounts: 4,
+    numberOfPosts: 10,
     carouselPosts: true,
-    contentStudio: false,
-    growthConsulting: false,
-    analyticsLevel: 'basic',
-    teamMembers: 1,
-    description: 'Free tier with basic features'
+    priceMonthly: 0,
   },
   Launch: {
-    socialAccounts: 15,
-    scheduledPosts: -1, // -1 means unlimited
+    socialAccounts: 5,
+    numberOfPosts: -1, // -1 means unlimited
     carouselPosts: true,
-    contentStudio: true,
-    growthConsulting: 'limited',
-    analyticsLevel: 'standard',
-    teamMembers: 1,
     priceMonthly: 9,
-    description: 'Best for beginner creators'
   },
   Rise: {
-    socialAccounts: 30,
-    scheduledPosts: -1, // -1 means unlimited
+    socialAccounts: 15,
+    numberOfPosts: -1, // -1 means unlimited
     carouselPosts: true,
-    contentStudio: true,
-    growthConsulting: 'standard',
-    analyticsLevel: 'advanced',
-    teamMembers: 3,
     priceMonthly: 18,
-    description: 'Best for growing creators'
   },
   Scale: {
     socialAccounts: -1, // -1 means unlimited
-    scheduledPosts: -1, // -1 means unlimited
+    numberOfPosts: -1, // -1 means unlimited
     carouselPosts: true,
-    contentStudio: true,
-    growthConsulting: 'priority',
-    analyticsLevel: 'premium',
-    teamMembers: 10,
     priceMonthly: 27,
-    description: 'Best for scaling brands'
   }
 };
 
 /**
  * Check if a user has reached their limit for a specific feature
  * @param {string} role - User role (Starter, Launch, Rise, Scale)
- * @param {string} limitType - Type of limit to check (e.g., 'socialAccounts', 'scheduledPosts')
+ * @param {string} limitType - Type of limit to check (e.g., 'socialAccounts', 'numberOfPosts')
  * @param {number} currentCount - Current count of items (e.g., number of connected accounts)
  * @returns {boolean} - True if limit reached, false otherwise
  */
@@ -63,14 +44,14 @@ const hasReachedLimit = (role, limitType, currentCount) => {
   // If limit is -1, it means unlimited
   if (limit === -1) return false;
   
-  // Check if current count has reached or exceeded the limit
-  return currentCount >= limit;
+  // Check if current count EXCEEDS the limit (allow count equal to limit)
+  return currentCount > limit;
 };
 
 /**
  * Get the limit value for a specific feature and role
  * @param {string} role - User role (Starter, Launch, Rise, Scale)
- * @param {string} limitType - Type of limit to get (e.g., 'socialAccounts', 'scheduledPosts')
+ * @param {string} limitType - Type of limit to get (e.g., 'socialAccounts', 'numberOfPosts')
  * @returns {number|string|boolean} - Limit value (number, string, or boolean depending on the limit type)
  */
 const getLimit = (role, limitType) => {

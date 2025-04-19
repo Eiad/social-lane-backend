@@ -615,10 +615,10 @@ router.get('/:uid/limits', async (req, res) => {
       role: role,
       socialAccounts: getLimit(role, 'socialAccounts'),
       currentSocialAccounts: currentSocialAccounts, 
-      scheduledPosts: getLimit(role, 'scheduledPosts'),
+      numberOfPosts: getLimit(role, 'numberOfPosts'),
       // For Starter, return posts used in *this* cycle
       // For others, return the limit (as it's typically unlimited or high)
-      currentPostsCount: role === 'Starter' ? currentPostsThisCycle : getLimit(role, 'scheduledPosts'),
+      currentPostsCount: role === 'Starter' ? currentPostsThisCycle : getLimit(role, 'numberOfPosts'),
       cycleStartDate: role === 'Starter' ? cycleStartDate : null,
       cycleEndDate: role === 'Starter' ? cycleEndDate : null,
       hasContentStudio: hasFeature(role, 'contentStudio'),
@@ -1355,6 +1355,36 @@ router.post('/:uid/social/tiktok/verify', async (req, res) => {
     });
   } catch (error) {
     console.error('Error verifying TikTok accounts:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error'
+    });
+  }
+});
+
+// @route   GET /users/:uid/post-usage
+// @desc    Get post usage statistics for a user
+// @access  Public (should be Private in production)
+router.get('/:uid/post-usage', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    
+    // Use the userService function to get post usage
+    const postUsage = await userService.getPostUsage(uid);
+    
+    if (!postUsage.success) {
+      return res.status(404).json({
+        success: false,
+        error: postUsage.error || 'Failed to get post usage'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: postUsage
+    });
+  } catch (error) {
+    console.error('Error fetching post usage:', error);
     res.status(500).json({
       success: false,
       error: 'Server error'

@@ -444,10 +444,29 @@ const processPost = async (post) => {
     }
   }
   
-  if (!anySuccess) {
-    throw new Error('Failed to post to any platform');
+  // Update post status to completed or partial based on results
+  // Determine overall status
+  let finalStatus = 'failed';
+  const allSuccess = Object.values(results).every(result => {
+    if (Array.isArray(result)) {
+      return result.every(r => r?.success);
+    }
+    return result?.success;
+  });
+
+  if (anySuccess && allSuccess) {
+    finalStatus = 'completed';
+  } else if (anySuccess) {
+    finalStatus = 'partial';
   }
-  
+
+  try {
+    await Post.updateOne({ _id: post._id }, { status: finalStatus, processing_results: results });
+    console.log(`[PROCESS POST] Updated post ${post._id} status to: ${finalStatus}`);
+  } catch(statusUpdateError) {
+     console.error(`[PROCESS POST] Error updating final post status for ${post._id}:`, statusUpdateError?.message);
+  }
+
   return results;
 };
 
@@ -542,15 +561,16 @@ const checkUserLimits = async (userId, postType) => {
       });
       
       // Check if user has reached their limit
-      if (hasReachedLimit(userRole, 'scheduledPosts', scheduledPostsCount)) {
-        const limit = userRole === 'Starter' ? 5 : 
-                     userRole === 'Launch' ? 30 :
-                     'unlimited';
+      if (hasReachedLimit(userRole, 'numberOfPosts', scheduledPostsCount)) {
+        // Use getLimit from roleLimits utility instead of hardcoding values
+        const { getLimit } = require('../utils/roleLimits');
+        const limit = getLimit(userRole, 'numberOfPosts');
+        const limitDisplay = limit === -1 ? 'unlimited' : limit;
         
         return {
           allowed: false,
-          message: `You have reached the maximum of ${limit} scheduled posts for your ${userRole} plan`,
-          limit,
+          message: `You have reached the maximum of ${limitDisplay} posts for your ${userRole} plan`,
+          limit: limitDisplay,
           current: scheduledPostsCount
         };
       }

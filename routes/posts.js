@@ -132,97 +132,63 @@ router.post('/', async (req, res) => {
     const userRole = user.role || 'Starter';
     const now = new Date();
 
-    // Check and potentially reset Starter plan post count
-    if (userRole === 'Starter') {
-      const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
-      let cycleStartDate = user.cycleStartDate;
-      
-      // If no cycle start date or it's older than 30 days, reset
-      if (!cycleStartDate || (now.getTime() - cycleStartDate.getTime() > cycleDuration)) {
-        console.log(`Resetting post count for Starter user ${userId}`);
-        user.postsThisCycle = 0;
-        user.cycleStartDate = now;
-        // Save immediately to avoid race conditions? Or save at the end. Save at the end for now.
-      }
-    }
-
-    // Check Post/Schedule Limits
-    const limitType = isScheduled ? 'scheduledPosts' : 'postsThisCycle'; // Use postsThisCycle for non-scheduled Starter
-    const limit = getLimit(userRole, 'scheduledPosts'); // All posts count towards the 'scheduledPosts' limit conceptually
-
-    // Check if limit is reached
-    let currentCount = 0;
-    if (userRole === 'Starter') {
-        currentCount = user.postsThisCycle || 0;
-    } else if (isScheduled) {
-        // For paid plans, only check scheduled post count
-        currentCount = await Post.countDocuments({
-            userId,
-            isScheduled: true,
-            status: 'pending' 
-        });
-    } // For paid plans, non-scheduled posts are unlimited (or follow 'scheduledPosts' if it's not -1)
-
-    if (limit !== -1 && currentCount >= limit) {
-      let errorMessage = `You have reached the maximum of ${limit} posts for your ${userRole} plan.`;
-      if (userRole === 'Starter') {
-          const cycleDuration = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
-          const resetTime = user.cycleStartDate ? new Date(user.cycleStartDate.getTime() + cycleDuration) : null;
-          errorMessage = `You have reached the maximum of ${limit} posts for the free Starter plan this cycle. Your limit resets on ${resetTime ? resetTime.toLocaleDateString() : 'your next cycle'}.`;
-      } else if (isScheduled) {
-          errorMessage = `You have reached the maximum of ${limit} scheduled posts for your ${userRole} plan.`
-      }
-      
-      return res.status(403).json({
+    // Use the new centralized method for checking post limits
+    // Get post usage information
+    const postUsage = await userService.getPostUsage(userId);
+    if (!postUsage.success) {
+      return res.status(500).json({
         success: false,
-        error: errorMessage,
-        limit: limit,
-        current: currentCount
+        error: 'Failed to retrieve post usage information'
       });
     }
 
-    // Validate scheduled date if scheduling
-    if (isScheduled) {
-      if (!scheduledDate) {
-        return res.status(400).json({
-          success: false,
-          error: 'Scheduled date is required for scheduled posts'
-        });
-      }
-      const scheduledDateTime = new Date(scheduledDate);
-      if (scheduledDateTime <= now) {
-        return res.status(400).json({
-          success: false,
-          error: 'Scheduled date must be in the future'
+    // Check if post limit reached
+    if (userRole === 'Starter') {
+      console.log(`[POSTS ROUTE] Checking post limits for Starter user ${userId}. Current count: ${postUsage.currentPostCount}, Limit: ${postUsage.limit}, Remaining: ${postUsage.postsRemaining}, Needs Reset: ${postUsage.needsCycleReset}`);
+      if (postUsage.postsRemaining !== -1 && postUsage.postsRemaining <= 0 && !postUsage.needsCycleReset) {
+        console.log(`[POSTS ROUTE] Post limit reached for user ${userId}.`);
+        return res.status(403).json({
+            success: false,
+            error: `You have reached the maximum of ${postUsage.limit} posts for the free Starter plan this cycle. Your limit resets on ${new Date(postUsage.nextResetDate).toLocaleDateString()}.`,
+            limit: postUsage.limit,
+            current: postUsage.currentPostCount,
+            nextReset: postUsage.nextResetDate
         });
       }
     }
 
-    // Check social accounts limit (keep existing logic - slightly modified to use user object)
-    const platformsToCheck = platforms || [];
-    if (platformsToCheck.length > 0) {
-      // Count currently connected accounts ONCE
-      let connectedAccountsCount = 0;
-      if (user.providerData?.tiktok) {
-        connectedAccountsCount += user.providerData.tiktok.length;
-      }
-      if (user.providerData?.twitter) {
-        // Check if twitter is array or object
-        if (Array.isArray(user.providerData.twitter)) {
-          connectedAccountsCount += user.providerData.twitter.length;
-        } else if (user.providerData.twitter) { // Check if it exists and is truthy
-          connectedAccountsCount += 1; 
-        }
-      }
+    // Check social accounts limit based on ACCOUNTS SELECTED FOR THIS POST
+    const selectedTiktokCount = Array.isArray(req.body.tiktok_accounts) ? req.body.tiktok_accounts.length : 0;
+    const selectedTwitterCount = Array.isArray(req.body.twitter_accounts) ? req.body.twitter_accounts.length : 0;
+    const totalSelectedAccounts = selectedTiktokCount + selectedTwitterCount;
 
-      if (hasReachedLimit(userRole, 'socialAccounts', connectedAccountsCount)) {
-         const accountLimit = getLimit(userRole, 'socialAccounts');
-         return res.status(403).json({
-           success: false,
-           error: `You have reached the maximum of ${accountLimit} social accounts for your ${userRole} plan. Please upgrade or remove an account.`,
-           limit: accountLimit,
-           current: connectedAccountsCount
-         });
+    console.log(`[POSTS ROUTE] Checking social account limit for ${userRole} user. Limit: ${getLimit(userRole, 'socialAccounts')}, Selected for this post: ${totalSelectedAccounts}`);
+
+    if (totalSelectedAccounts > 0 && hasReachedLimit(userRole, 'socialAccounts', totalSelectedAccounts)) {
+        const accountLimit = getLimit(userRole, 'socialAccounts');
+        console.error(`[POSTS ROUTE] Social account limit reached. User attempted to post to ${totalSelectedAccounts} accounts, but limit is ${accountLimit}.`);
+        return res.status(403).json({
+            success: false,
+            error: `Your ${userRole} plan allows posting to ${accountLimit} social account(s) at a time. You tried to post to ${totalSelectedAccounts}. Please upgrade or select fewer accounts.`, // Updated error message
+            limit: accountLimit,
+            selected: totalSelectedAccounts
+        });
+    }
+
+    // Increment post count for Starter plan users BEFORE saving post
+    if (userRole === 'Starter') {
+      console.log(`[POSTS ROUTE] Incrementing post count for Starter user ${userId} before saving.`);
+      const incrementResult = await userService.incrementPostCount(userId);
+      if (!incrementResult.success) {
+        console.error('[POSTS ROUTE] Failed to increment post count:', incrementResult.error);
+        // Do NOT proceed if increment fails, as it means quota might be full or error occurred
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to update post count. Please try again.',
+            details: incrementResult.error
+        });
+      } else {
+         console.log(`[POSTS ROUTE] Post count incremented. New count: ${incrementResult.currentPostCount}`);
       }
     }
 
@@ -421,15 +387,7 @@ router.post('/', async (req, res) => {
     }
     
     // Set status based on whether it's scheduled
-    postData.status = isScheduled ? 'pending' : 'completed';
-    
-    // Increment post count for Starter plan AFTER successful post creation
-    if (userRole === 'Starter') {
-      user.postsThisCycle = (user.postsThisCycle || 0) + 1;
-    }
-    
-    // Save user changes (cycle start date and post count)
-    await user.save();
+    postData.status = isScheduled ? 'pending' : 'processing'; // Initial status
 
     // Create and save the post
     console.log('Saving post to database...');
@@ -442,33 +400,31 @@ router.post('/', async (req, res) => {
       console.log('Saved post TikTok accounts count:', savedPost.tiktok_accounts?.length || 0);
     }
     
-    // If not scheduled, process post immediately
+    // If not scheduled, process post immediately asynchronously
     if (!isScheduled) {
-      console.log('Processing post immediately (not scheduled)...');
-      // Process the post (this could take some time, so we don't await it)
-      processPost(post)
-        .then(results => {
-          console.log('Post processing completed:', results);
-        })
-        .catch(error => {
-          console.error('Error processing post:', error);
-        });
+      console.log('Triggering immediate post processing asynchronously for post ID:', post._id);
+      // Don't await - let the request return while processing happens
+      processPost(post).catch(error => {
+          console.error(`[ASYNC PROCESS ERROR] Error processing immediate post ${post._id}:`, error);
+          // Optionally update post status to failed here if needed, though processPost should handle its own errors
+          Post.findByIdAndUpdate(post._id, { $set: { status: 'failed', processing_error: error.message || 'Async processing failed' } }).catch(err => console.error("Failed to update post status after async error:", err));
+      });
       
-      // Return success response without waiting for processing to complete
+      // Return success response indicating processing has started
       res.status(201).json({
         success: true,
         data: {
           _id: post._id,
-          status: 'processing'
+          status: 'processing' // Indicate backend processing started
         },
-        message: 'Post created and processing started'
+        message: 'Post received and processing started in background'
       });
     } else {
       // For scheduled posts, just return the created post
       console.log('Post scheduled for later processing at:', scheduledDate);
       res.status(201).json({
         success: true,
-        data: post,
+        data: post, // Return full post data for scheduled items
         message: 'Post scheduled successfully'
       });
     }
